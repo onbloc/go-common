@@ -31,11 +31,13 @@ type BatchMessage struct {
 type Publisher interface {
 	PublishMessage(message Message) error
 	PublishMessages(messages []Message) error
+	Close() error
 }
 
 type Subscriber interface {
 	StartListening(ctx context.Context, handler MessageHandler) error
 	StartBatchListening(ctx context.Context, config BatchConfig, handler BatchMessageHandler) error
+	Close() error
 }
 
 type (

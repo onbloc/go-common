@@ -60,7 +60,7 @@ if err != nil {
 err = publisher.PublishMessage(kafka.Message{Topic: "orders", Key: "order-1", Value: "{...}"})
 ```
 
-Call `kafka.NewProducer` directly instead of `NewPublisher` when the caller needs `Close()`; it returns the concrete `*kafka.Producer`.
+Call `publisher.Close()` on shutdown to close the underlying producer.
 
 ### Consuming
 
@@ -85,7 +85,7 @@ err = subscriber.StartBatchListening(ctx, conf.Kafka.Consumer.BatchConfig(), fun
 })
 ```
 
-When `Config.Consumer.Concurrency` is greater than 1, `NewSubscriber` returns a `*kafka.ConcurrentConsumer` that runs that many consumer instances in the same group to process partitions in parallel.
+When `Config.Consumer.Concurrency` is greater than 1, `NewSubscriber` returns a `*kafka.ConcurrentConsumer` that runs that many consumer instances in the same group to process partitions in parallel. Call `subscriber.Close()` on shutdown to stop consuming and close the consumer group(s).
 
 ### Logging
 
