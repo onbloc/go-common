@@ -260,7 +260,7 @@ func (h *batchConsumerHandler) consumeBatch(session sarama.ConsumerGroupSession,
 	batchMessages := make([]BatchMessage, 0, len(messages))
 	for _, msg := range messages {
 		batchMessages = append(batchMessages, BatchMessage{
-			Value: string(msg.Value),
+			Value: msg.Value,
 			Metadata: Metadata{
 				Topic:     msg.Topic,
 				Key:       string(msg.Key),

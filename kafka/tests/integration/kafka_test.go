@@ -122,7 +122,7 @@ func TestKafkaIntegration_PublishMessageTooLarge(t *testing.T) {
 	largeMessage := strings.Repeat("A", 2*1024)
 	t.Logf("Attempting to publish message of size: %d bytes (limit: %d bytes)", len(largeMessage), 1024)
 
-	err := producer.PublishMessage(commonkafka.Message{Topic: topic, Value: largeMessage})
+	err := producer.PublishMessage(commonkafka.Message{Topic: topic, Value: []byte(largeMessage)})
 	if err == nil {
 		t.Fatal("expected error when publishing message larger than MaxMessageBytes, but got nil")
 	}
@@ -194,8 +194,8 @@ func TestKafkaIntegration_StartListeningStopsOnContextCancelAndResumesWithNewCon
 	listenerErr := make(chan error, 1)
 
 	go func() {
-		listenerErr <- env.consumer.StartListening(listenerCtx, func(message string, _ commonkafka.Metadata, ack func() error) error {
-			processedMessages <- message
+		listenerErr <- env.consumer.StartListening(listenerCtx, func(message []byte, _ commonkafka.Metadata, ack func() error) error {
+			processedMessages <- string(message)
 			if err := ack(); err != nil {
 				return err
 			}
@@ -330,7 +330,7 @@ func newConsumer(t *testing.T, kafkaConf *commonkafka.Config) *commonkafka.Consu
 func (e *testEnv) publishMessage(t *testing.T, value string) {
 	t.Helper()
 
-	if err := e.producer.PublishMessage(commonkafka.Message{Topic: e.topic, Value: value}); err != nil {
+	if err := e.producer.PublishMessage(commonkafka.Message{Topic: e.topic, Value: []byte(value)}); err != nil {
 		t.Fatalf("failed to publish message: %v", err)
 	}
 }
@@ -340,7 +340,7 @@ func (e *testEnv) publishMessages(t *testing.T, values []string) {
 
 	messages := make([]commonkafka.Message, len(values))
 	for i, v := range values {
-		messages[i] = commonkafka.Message{Topic: e.topic, Value: v}
+		messages[i] = commonkafka.Message{Topic: e.topic, Value: []byte(v)}
 	}
 	if err := e.producer.PublishMessages(messages); err != nil {
 		t.Fatalf("failed to publish messages: %v", err)
@@ -357,8 +357,8 @@ func (e *testEnv) consumeOne(t *testing.T, timeout time.Duration) string {
 	done := make(chan struct{})
 
 	go func() {
-		if err := e.consumer.StartListening(ctx, func(message string, _ commonkafka.Metadata, ack func() error) error {
-			received = message
+		if err := e.consumer.StartListening(ctx, func(message []byte, _ commonkafka.Metadata, ack func() error) error {
+			received = string(message)
 			close(done)
 			return ack()
 		}); err != nil && ctx.Err() == nil {
@@ -386,9 +386,9 @@ func (e *testEnv) consumeN(t *testing.T, count int, timeout time.Duration) []str
 	done := make(chan struct{})
 
 	go func() {
-		if err := e.consumer.StartListening(ctx, func(message string, _ commonkafka.Metadata, ack func() error) error {
+		if err := e.consumer.StartListening(ctx, func(message []byte, _ commonkafka.Metadata, ack func() error) error {
 			mu.Lock()
-			received = append(received, message)
+			received = append(received, string(message))
 			n := len(received)
 			mu.Unlock()
 

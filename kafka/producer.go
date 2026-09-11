@@ -36,10 +36,6 @@ func (p *Producer) PublishMessage(message Message) error {
 }
 
 func (p *Producer) PublishMessageWithMetadata(message Message) (Metadata, error) {
-	if message.Value == "" {
-		return Metadata{}, fmt.Errorf("message value cannot be empty")
-	}
-
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -49,7 +45,7 @@ func (p *Producer) PublishMessageWithMetadata(message Message) (Metadata, error)
 
 	msg := &sarama.ProducerMessage{
 		Topic: message.Topic,
-		Value: sarama.StringEncoder(message.Value),
+		Value: sarama.ByteEncoder(message.Value),
 	}
 
 	if message.Key != "" {
@@ -88,7 +84,7 @@ func (p *Producer) PublishMessages(messages []Message) error {
 
 		msg := &sarama.ProducerMessage{
 			Topic: message.Topic,
-			Value: sarama.StringEncoder(message.Value),
+			Value: sarama.ByteEncoder(message.Value),
 		}
 
 		if message.Key != "" {

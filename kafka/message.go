@@ -8,7 +8,10 @@ import (
 type Message struct {
 	Topic string
 	Key   string
-	Value string
+	// Value is the raw message payload. A nil Value publishes a Kafka
+	// tombstone (a null-value record used to mark a key for deletion on a
+	// compacted topic); a non-nil, possibly empty, Value publishes normally.
+	Value []byte
 }
 
 type Metadata struct {
@@ -24,7 +27,7 @@ type BatchConfig struct {
 }
 
 type BatchMessage struct {
-	Value    string
+	Value    []byte
 	Metadata Metadata
 }
 
@@ -41,7 +44,7 @@ type Subscriber interface {
 }
 
 type (
-	MessageHandler      func(message string, metadata Metadata, ack func() error) error
+	MessageHandler      func(message []byte, metadata Metadata, ack func() error) error
 	BatchMessageHandler func(messages []BatchMessage, ack func() error) error
 )
 

@@ -57,8 +57,10 @@ if err != nil {
     return err
 }
 
-err = publisher.PublishMessage(kafka.Message{Topic: "orders", Key: "order-1", Value: "{...}"})
+err = publisher.PublishMessage(kafka.Message{Topic: "orders", Key: "order-1", Value: []byte("{...}")})
 ```
+
+`Message.Value` is `[]byte`, so any payload encoding (JSON, protobuf, raw binary) works. A nil `Value` publishes a Kafka tombstone (a null-value record, typically used to mark a key for deletion on a compacted topic).
 
 Call `publisher.Close()` on shutdown to close the underlying producer.
 
@@ -70,7 +72,7 @@ if err != nil {
     return err
 }
 
-err = subscriber.StartListening(ctx, func(message string, meta kafka.Metadata, ack func() error) error {
+err = subscriber.StartListening(ctx, func(message []byte, meta kafka.Metadata, ack func() error) error {
     // handle message
     return ack()
 })
