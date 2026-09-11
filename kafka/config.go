@@ -21,6 +21,17 @@ const (
 	defaultBatchFlushIntervalMs = 1000
 )
 
+// Fallback producer tuning, mirroring the struct `default` tags on
+// ProducerSettings. Applied when ProducerSettings is built directly (e.g. in
+// code, without a config loader applying struct-tag defaults), where the zero
+// value would otherwise silently disable retries and idempotence.
+const (
+	defaultProducerMaxRetries      = 3
+	defaultProducerRetryBackoffMs  = 100
+	defaultProducerMaxOpenRequests = 1
+	defaultProducerMaxMessageBytes = 5242880
+)
+
 // Config is the application-owned Kafka configuration. Decode it with a
 // mapstructure-aware config loader (such as github.com/onbloc/go-common/config)
 // or construct it directly.
@@ -33,13 +44,16 @@ type Config struct {
 }
 
 type ProducerSettings struct {
-	RequiredAcks      string `mapstructure:"required_acks" default:"all"`
-	Compression       string `mapstructure:"compression" default:"lz4"`
-	MaxRetries        int    `mapstructure:"max_retries" default:"3"`
-	RetryBackoffMs    int    `mapstructure:"retry_backoff_ms" default:"100"`
-	MaxOpenRequests   int    `mapstructure:"max_open_requests" default:"1"`
-	MaxMessageBytes   int    `mapstructure:"max_message_bytes" default:"5242880"`
-	EnableIdempotence bool   `mapstructure:"enable_idempotence" default:"true"`
+	RequiredAcks    string `mapstructure:"required_acks" default:"all"`
+	Compression     string `mapstructure:"compression" default:"lz4"`
+	MaxRetries      int    `mapstructure:"max_retries" default:"3"`
+	RetryBackoffMs  int    `mapstructure:"retry_backoff_ms" default:"100"`
+	MaxOpenRequests int    `mapstructure:"max_open_requests" default:"1"`
+	MaxMessageBytes int    `mapstructure:"max_message_bytes" default:"5242880"`
+	// EnableIdempotence defaults to true when nil. Use a pointer so an
+	// explicit false (disable idempotence) is distinguishable from an unset
+	// field, which a plain bool cannot represent.
+	EnableIdempotence *bool `mapstructure:"enable_idempotence" default:"true"`
 }
 
 type ConsumerSettings struct {
@@ -202,33 +216,40 @@ func buildConsumerConfig(conf *Config) (*sarama.Config, error) {
 func applyProducerSettings(sc *sarama.Config, p *ProducerSettings) {
 	sc.Producer.RequiredAcks = parseKafkaRequiredAcks(p.RequiredAcks)
 	sc.Producer.Compression = parseKafkaCompression(p.Compression)
-	sc.Producer.Retry.Max = p.MaxRetries
-	sc.Producer.Retry.Backoff = time.Duration(p.RetryBackoffMs) * time.Millisecond
-	sc.Producer.Idempotent = p.EnableIdempotence
+	sc.Producer.Retry.Max = defaultIfZero(p.MaxRetries, defaultProducerMaxRetries)
+	sc.Producer.Retry.Backoff = time.Duration(defaultIfZero(p.RetryBackoffMs, defaultProducerRetryBackoffMs)) * time.Millisecond
+	sc.Producer.Idempotent = idempotenceEnabled(p.EnableIdempotence)
+	sc.Producer.MaxMessageBytes = defaultIfZero(p.MaxMessageBytes, defaultProducerMaxMessageBytes)
+
+	maxOpenRequests := defaultIfZero(p.MaxOpenRequests, defaultProducerMaxOpenRequests)
 	if sc.Producer.Idempotent {
 		// Sarama requires idempotent producers to use WaitForAll acks and at
 		// most one in-flight request per broker connection. Keep this clamp
 		// explicit so Kafka producer ordering/duplicate guarantees are not
 		// accidentally disabled by a wider max_open_requests setting.
 		sc.Producer.RequiredAcks = sarama.WaitForAll
-		if sc.Producer.Retry.Max <= 0 {
-			sc.Producer.Retry.Max = 3
+		if maxOpenRequests > 1 {
+			maxOpenRequests = 1
 		}
-		if p.MaxOpenRequests <= 0 || p.MaxOpenRequests > 1 {
-			sc.Net.MaxOpenRequests = 1
-		}
+	}
+	sc.Net.MaxOpenRequests = maxOpenRequests
+}
+
+// defaultIfZero substitutes def for v when v is unset (zero or negative), the
+// same "unset means apply the documented default" convention applyConsumerSettings
+// uses for its own timing fields.
+func defaultIfZero(v, def int) int {
+	if v <= 0 {
+		return def
 	}
 
-	if p.MaxOpenRequests > 0 {
-		sc.Net.MaxOpenRequests = p.MaxOpenRequests
-		if sc.Producer.Idempotent && sc.Net.MaxOpenRequests > 1 {
-			sc.Net.MaxOpenRequests = 1
-		}
-	}
+	return v
+}
 
-	if p.MaxMessageBytes > 0 {
-		sc.Producer.MaxMessageBytes = p.MaxMessageBytes
-	}
+// idempotenceEnabled treats a nil EnableIdempotence as the documented default
+// (true); only an explicit false disables idempotence.
+func idempotenceEnabled(enabled *bool) bool {
+	return enabled == nil || *enabled
 }
 
 func applyConsumerSettings(sc *sarama.Config, c *ConsumerSettings) {

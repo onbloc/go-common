@@ -250,16 +250,22 @@ func newTestEnv(t *testing.T, topic, consumerGroup string) *testEnv {
 func newLargeMessageTestEnv(t *testing.T, topic, consumerGroup string) *testEnv {
 	t.Helper()
 
+	// Idempotence forces at most one in-flight request per broker connection,
+	// which would silently override the MaxOpenRequests: 5 below. Disable it
+	// explicitly so this test actually exercises pipelined large-message sends.
+	disableIdempotence := false
+
 	kafkaConf := &commonkafka.Config{
 		Brokers:  []string{sharedKafkaBroker},
 		ClientID: "test-client-" + topic,
 		Producer: &commonkafka.ProducerSettings{
-			RequiredAcks:    "all",
-			MaxRetries:      3,
-			RetryBackoffMs:  100,
-			Compression:     "lz4",
-			MaxMessageBytes: 5 * 1024 * 1024,
-			MaxOpenRequests: 5,
+			RequiredAcks:      "all",
+			MaxRetries:        3,
+			RetryBackoffMs:    100,
+			Compression:       "lz4",
+			MaxMessageBytes:   5 * 1024 * 1024,
+			MaxOpenRequests:   5,
+			EnableIdempotence: &disableIdempotence,
 		},
 		Consumer: &commonkafka.ConsumerSettings{
 			Topics:           []string{topic},

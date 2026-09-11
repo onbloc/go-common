@@ -139,3 +139,55 @@ func TestConsumerSettingsBatchConfigConfigured(t *testing.T) {
 		t.Fatalf("FlushInterval = %s, want 500ms", config.FlushInterval)
 	}
 }
+
+func TestNewProducerConfigByDefaultsZeroValueSettings(t *testing.T) {
+	// A directly constructed ProducerSettings{} arrives with zero-value
+	// fields (no struct-tag defaulting). These must still match the
+	// documented defaults instead of silently disabling retries/idempotence.
+	producerConfig, err := NewProducerConfigBy(&Config{
+		Brokers:  []string{"localhost:9092"},
+		Producer: &ProducerSettings{},
+	})
+	if err != nil {
+		t.Fatalf("NewProducerConfigBy() error = %v", err)
+	}
+
+	sc := producerConfig.ProducerConfig
+	if sc.Producer.Retry.Max != defaultProducerMaxRetries {
+		t.Fatalf("Retry.Max = %d, want %d", sc.Producer.Retry.Max, defaultProducerMaxRetries)
+	}
+	if want := time.Duration(defaultProducerRetryBackoffMs) * time.Millisecond; sc.Producer.Retry.Backoff != want {
+		t.Fatalf("Retry.Backoff = %s, want %s", sc.Producer.Retry.Backoff, want)
+	}
+	if !sc.Producer.Idempotent {
+		t.Fatal("Idempotent = false, want true (nil EnableIdempotence should default to true)")
+	}
+	if sc.Producer.MaxMessageBytes != defaultProducerMaxMessageBytes {
+		t.Fatalf("MaxMessageBytes = %d, want %d", sc.Producer.MaxMessageBytes, defaultProducerMaxMessageBytes)
+	}
+	if sc.Net.MaxOpenRequests != 1 {
+		t.Fatalf("MaxOpenRequests = %d, want 1 (idempotence requires at most one in-flight request)", sc.Net.MaxOpenRequests)
+	}
+}
+
+func TestNewProducerConfigByRespectsExplicitIdempotenceFalse(t *testing.T) {
+	disabled := false
+	producerConfig, err := NewProducerConfigBy(&Config{
+		Brokers: []string{"localhost:9092"},
+		Producer: &ProducerSettings{
+			EnableIdempotence: &disabled,
+			MaxOpenRequests:   5,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewProducerConfigBy() error = %v", err)
+	}
+
+	sc := producerConfig.ProducerConfig
+	if sc.Producer.Idempotent {
+		t.Fatal("Idempotent = true, want false for explicit EnableIdempotence=false")
+	}
+	if sc.Net.MaxOpenRequests != 5 {
+		t.Fatalf("MaxOpenRequests = %d, want 5 (non-idempotent producers are not clamped)", sc.Net.MaxOpenRequests)
+	}
+}
