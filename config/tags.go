@@ -8,6 +8,8 @@ import (
 	"github.com/spf13/viper"
 )
 
+var envKeyReplacer = strings.NewReplacer(".", "_", "-", "_")
+
 func applyTags(
 	loader *viper.Viper,
 	targetType reflect.Type,
@@ -59,7 +61,7 @@ func applyTags(
 		if defaultValue, ok := field.Tag.Lookup("default"); ok {
 			loader.SetDefault(configKey, defaultValue)
 		}
-		if err := loader.BindEnv(configKey, environmentKey(envPrefix, fieldPath)); err != nil {
+		if err := loader.BindEnv(configKey, environmentKey(envPrefix, configKey)); err != nil {
 			return fmt.Errorf("bind environment variable for %q: %w", configKey, err)
 		}
 	}
@@ -69,17 +71,22 @@ func applyTags(
 
 func mapstructureKey(field reflect.StructField) (key string, squash, skip bool) {
 	tag, tagged := field.Tag.Lookup("mapstructure")
-	parts := strings.Split(tag, ",")
 	if tagged {
-		key = parts[0]
+		var options string
+		key, options, _ = strings.Cut(tag, ",")
+		for options != "" {
+			option, remaining, found := strings.Cut(options, ",")
+			if option == "squash" {
+				squash = true
+			}
+			if !found {
+				break
+			}
+			options = remaining
+		}
 	}
 	if key == "-" {
 		return "", false, true
-	}
-	for _, option := range parts[1:] {
-		if option == "squash" {
-			squash = true
-		}
 	}
 	if key == "" && !squash {
 		key = strings.ToLower(field.Name)
@@ -95,12 +102,11 @@ func appendPath(path []string, key string) []string {
 	return append(result, key)
 }
 
-func environmentKey(prefix string, path []string) string {
-	normalize := strings.NewReplacer(".", "_", "-", "_")
-	key := strings.ToUpper(normalize.Replace(strings.Join(path, ".")))
+func environmentKey(prefix, configKey string) string {
+	key := strings.ToUpper(envKeyReplacer.Replace(configKey))
 	if prefix == "" {
 		return key
 	}
 
-	return strings.ToUpper(normalize.Replace(prefix)) + "_" + key
+	return strings.ToUpper(envKeyReplacer.Replace(prefix)) + "_" + key
 }

@@ -19,6 +19,7 @@ func TestMapstructureKey(t *testing.T) {
 		Ignored   string `mapstructure:"-"`
 		Embedded  `mapstructure:",squash"`
 		Unwrapped Embedded
+		Multi     Embedded `mapstructure:",omitempty,squash"`
 	}
 
 	tests := []struct {
@@ -33,6 +34,7 @@ func TestMapstructureKey(t *testing.T) {
 		{name: "ignored", fieldIndex: 2, wantSkip: true},
 		{name: "squashed", fieldIndex: 3, wantSquash: true},
 		{name: "named struct", fieldIndex: 4, wantKey: "unwrapped"},
+		{name: "multiple options", fieldIndex: 5, wantSquash: true},
 	}
 
 	targetType := reflect.TypeFor[fields]()
@@ -60,20 +62,20 @@ func TestEnvironmentKey(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name   string
-		prefix string
-		path   []string
-		want   string
+		name      string
+		prefix    string
+		configKey string
+		want      string
 	}{
-		{name: "nested", path: []string{appPath, "log-level"}, want: "APP_LOG_LEVEL"},
-		{name: "normalized prefix", prefix: "my.service", path: []string{appPath, "port"}, want: "MY_SERVICE_APP_PORT"},
+		{name: "nested", configKey: "app.log-level", want: "APP_LOG_LEVEL"},
+		{name: "normalized prefix", prefix: "my.service", configKey: "app.port", want: "MY_SERVICE_APP_PORT"},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := environmentKey(test.prefix, test.path); got != test.want {
+			if got := environmentKey(test.prefix, test.configKey); got != test.want {
 				t.Fatalf("environmentKey() = %q, want %q", got, test.want)
 			}
 		})
