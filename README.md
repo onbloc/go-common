@@ -15,3 +15,9 @@ Module-specific usage and compatibility notes live in each module directory.
 ## Development
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for repository conventions, validation commands, and the release model.
+
+## License
+
+Copyright 2026 Onbloc.
+
+Licensed under the [Apache License, Version 2.0](LICENSE).

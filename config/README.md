@@ -4,12 +4,13 @@
 
 ## Installation
 
-While this repository is private, configure Go and GitHub authentication before downloading the module:
+Requires Go 1.23 or later. Once the repository is public and `config/v0.1.0` is published, install the module with:
 
 ```bash
-go env -w GOPRIVATE=github.com/onbloc/*
 go get github.com/onbloc/go-common/config@v0.1.0
 ```
+
+Public downloads do not require GitHub authentication or `GOPRIVATE`.
 
 ## Usage
 
@@ -79,6 +80,8 @@ default tag < base YAML < environment YAML < OS environment variable
 
 An empty environment variable is ignored, matching Viper's default behavior.
 
+YAML overlays use Viper's merge behavior. Keep each key's value type consistent across files; replacing a mapping with a scalar is unsupported and may silently retain the base mapping.
+
 ## File selection
 
 - `Options.Path` defaults to `config/config.yaml`.
@@ -101,14 +104,21 @@ Dots and hyphens become underscores. `Options.EnvPrefix` adds a normalized prefi
 
 ```go
 commonconfig.Load(&target, commonconfig.Options{
-    EnvPrefix: "GNOSWAP",
+    EnvPrefix: "SERVICE",
 })
 ```
 
 ```text
-app.port -> GNOSWAP_APP_PORT
+app.port -> SERVICE_APP_PORT
 ```
 
-Use `mapstructure:",squash"` to flatten an embedded struct intentionally. Unexported and `mapstructure:"-"` fields are ignored.
+## Supported struct shapes
 
-Recursive struct types are safe to load from YAML. Automatic environment binding stops when a type recurs because an unbounded recursive environment path cannot be represented.
+- Nested structs and pointers to nested structs support automatic defaults and environment bindings.
+- Use `mapstructure:",squash"` on an embedded **value** struct to flatten it intentionally. A nil embedded pointer with `squash` is unsupported and causes a decoding error; prefer value embedding.
+- Unexported and `mapstructure:"-"` fields are ignored.
+- Recursive struct types can be decoded from YAML, but automatic environment binding **and default-tag registration** stop when a type recurs. YAML-created recursive child nodes therefore do not receive defaults from those skipped tags.
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE).
