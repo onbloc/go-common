@@ -15,11 +15,16 @@
 // merges a sibling file whose name includes that environment. For example,
 // config/config.yaml with Environment "production" selects the optional
 // config/config.production.yaml overlay.
+// Keep YAML value types consistent across files. Overlays use Viper's merge
+// behavior; replacing a mapping with a scalar may retain the base mapping.
 //
 // Environment variables have the highest precedence. Their names follow the
 // full mapstructure path, converted to uppercase snake case; app.port becomes
 // APP_PORT. Options.EnvPrefix can add a namespace such as SERVICE_APP_PORT.
 //
-// Only exported fields participate in automatic bindings. Recursive types are
-// cycle-safe, and mapstructure:",squash" explicitly flattens embedded structs.
+// Only exported fields participate in automatic bindings. Default-tag
+// registration and environment binding stop when a type recurs; recursive child
+// nodes decoded from YAML do not receive defaults from the skipped tags.
+// Use mapstructure:",squash" on embedded value structs. Squashing a nil embedded
+// pointer is unsupported and returns a decoding error.
 package config
