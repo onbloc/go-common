@@ -20,4 +20,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for repository conventions, validation co
 
 Copyright 2026 Onbloc.
 
-Licensed under the [Apache License, Version 2.0](LICENSE).
+Licensed under the [MIT License](LICENSE).
