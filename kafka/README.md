@@ -49,6 +49,25 @@ kafka:
     group: order-processor
 ```
 
+### Configuration in code
+
+`Config` is a plain struct, so the loader above is a recommendation, not a requirement. Any mapstructure-aware loader works, or build it directly. `DefaultConfig()` returns every documented default (the same values the `default` struct tags give a loader); set brokers, topics, and group, then override whatever else you need:
+
+```go
+conf := kafka.DefaultConfig()
+conf.Brokers = []string{"localhost:9092"}
+conf.Consumer.Topics = []string{"orders"}
+conf.Consumer.Group = "order-processor"
+
+if err := conf.Validate(); err != nil {
+    return err
+}
+```
+
+`Validate` reports every problem at once: missing brokers, group or topics, unrecognized `required_acks` / `compression` / `auto_offset_reset` / `protocol` / `sasl_mechanism` values, negative numbers, a heartbeat not shorter than the session timeout, and `max_retries: 0` while idempotence is on. A nil `producer` or `consumer` section is valid, so a producer-only service need not configure a consumer. `NewPublisher` and `NewSubscriber` validate only the sections they use.
+
+Unset numeric fields resolve to their defaults. `max_retries` and `enable_idempotence` are pointers so an explicit `0` / `false` is honored rather than treated as unset.
+
 ### Publishing
 
 ```go

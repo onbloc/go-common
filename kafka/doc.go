@@ -1,13 +1,15 @@
 // Package kafka provides a Producer/Consumer wrapper around Sarama for
 // publishing and consuming Kafka messages.
 //
-// Applications own their configuration struct and decode it with a config
-// loader such as github.com/onbloc/go-common/config; this package only needs
-// the resulting *Config:
+// Configuration is a plain *Config struct; this package does not depend on any
+// config loader. Decode it with any mapstructure-aware loader (such as
+// github.com/onbloc/go-common/config, which applies the `default` tags), or
+// build it in code starting from DefaultConfig:
 //
-//	conf := &kafka.Config{
-//		Brokers:  []string{"localhost:9092"},
-//		Producer: &kafka.ProducerSettings{RequiredAcks: "all", Compression: "lz4"},
+//	conf := kafka.DefaultConfig()
+//	conf.Brokers = []string{"localhost:9092"}
+//	if err := conf.Validate(); err != nil {
+//		return err
 //	}
 //	publisher, err := kafka.NewPublisher(conf, nil)
 //

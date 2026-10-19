@@ -9,32 +9,69 @@ import (
 	"github.com/IBM/sarama"
 )
 
-// Fallback consumer group timing, mirroring the struct `default` tags on
-// ConsumerSettings and Sarama's own defaults. Applied when the configured
-// values are zero (e.g. slice-element consumers that struct-tag defaulting
-// cannot reach).
+// Documented defaults. The struct `default` tags below must repeat these as
+// literals (tags cannot reference constants); TestDefaultTagsMatchDefaultConfig
+// keeps the two in sync. They are applied by DefaultConfig, and as a fallback
+// when a field is left unset in a Config built without a loader.
 const (
-	defaultSessionTimeoutMs = 10000
-	defaultHeartbeatMs      = 3000
+	defaultRequiredAcks    = "all"
+	defaultCompression     = "lz4"
+	defaultAutoOffsetReset = "earliest"
+	defaultSecurityProto   = "PLAINTEXT"
+
+	defaultProducerMaxRetries      = 3
+	defaultProducerRetryBackoffMs  = 100
+	defaultProducerMaxOpenRequests = 1
+	defaultProducerMaxMessageBytes = 5242880
+
+	defaultConsumerConcurrency = 1
+	defaultSessionTimeoutMs    = 10000
+	defaultHeartbeatMs         = 3000
+	defaultMaxFetchBytes       = 5242880
 
 	defaultBatchMaxMessages     = 200
 	defaultBatchFlushIntervalMs = 1000
 )
 
-// Fallback producer tuning, mirroring the struct `default` tags on
-// ProducerSettings. Applied when ProducerSettings is built directly (e.g. in
-// code, without a config loader applying struct-tag defaults), where the zero
-// value would otherwise silently disable retries and idempotence.
-const (
-	defaultProducerMaxRetries      = 3
-	defaultProducerRetryBackoffMs  = 100
-	defaultProducerMaxOpenRequests = 1
-	defaultProducerMaxMessageBytes = 5242880
-)
+// DefaultConfig returns a Config with every documented default set and no
+// brokers, topics, or consumer group. Set those, then override anything else.
+// It is the in-code equivalent of what a loader produces from the `default`
+// tags.
+func DefaultConfig() *Config {
+	maxRetries := defaultProducerMaxRetries
+	idempotence := true
 
-// Config is the application-owned Kafka configuration. Decode it with a
-// mapstructure-aware config loader (such as github.com/onbloc/go-common/config)
-// or construct it directly.
+	return &Config{
+		Producer: &ProducerSettings{
+			RequiredAcks:      defaultRequiredAcks,
+			Compression:       defaultCompression,
+			MaxRetries:        &maxRetries,
+			RetryBackoffMs:    defaultProducerRetryBackoffMs,
+			MaxOpenRequests:   defaultProducerMaxOpenRequests,
+			MaxMessageBytes:   defaultProducerMaxMessageBytes,
+			EnableIdempotence: &idempotence,
+		},
+		Consumer: &ConsumerSettings{
+			Concurrency:          defaultConsumerConcurrency,
+			AutoOffsetReset:      defaultAutoOffsetReset,
+			SessionTimeoutMs:     defaultSessionTimeoutMs,
+			HeartbeatMs:          defaultHeartbeatMs,
+			MaxFetchBytes:        defaultMaxFetchBytes,
+			BatchMaxMessages:     defaultBatchMaxMessages,
+			BatchFlushIntervalMs: defaultBatchFlushIntervalMs,
+		},
+		Security: &SecurityConfig{Protocol: defaultSecurityProto},
+	}
+}
+
+// Config is the application-owned Kafka configuration. It is a plain struct
+// with no dependency on a config loader: decode it with any
+// mapstructure-aware loader (such as github.com/onbloc/go-common/config,
+// which applies the `default` tags and environment bindings), or start from
+// DefaultConfig and set the fields in code.
+//
+// Call Validate to check a Config before use. NewPublisher and NewSubscriber
+// validate the sections they use.
 type Config struct {
 	Producer *ProducerSettings `mapstructure:"producer"`
 	Consumer *ConsumerSettings `mapstructure:"consumer"`
@@ -46,10 +83,14 @@ type Config struct {
 type ProducerSettings struct {
 	RequiredAcks    string `mapstructure:"required_acks" default:"all"`
 	Compression     string `mapstructure:"compression" default:"lz4"`
-	MaxRetries      int    `mapstructure:"max_retries" default:"3"`
 	RetryBackoffMs  int    `mapstructure:"retry_backoff_ms" default:"100"`
 	MaxOpenRequests int    `mapstructure:"max_open_requests" default:"1"`
 	MaxMessageBytes int    `mapstructure:"max_message_bytes" default:"5242880"`
+	// MaxRetries defaults to 3 when nil. A pointer lets an explicit 0 (no
+	// retries) be told apart from an unset field. Zero retries is rejected by
+	// Validate while idempotence is enabled, since Sarama requires retries for
+	// idempotent producers.
+	MaxRetries *int `mapstructure:"max_retries" default:"3"`
 	// EnableIdempotence defaults to true when nil. Use a pointer so an
 	// explicit false (disable idempotence) is distinguishable from an unset
 	// field, which a plain bool cannot represent.
@@ -125,6 +166,10 @@ func NewProducerConfigBy(conf *Config) (*ProducerConfig, error) {
 		return nil, fmt.Errorf("producer config is required for Kafka producer")
 	}
 
+	if err := conf.validateProducer(); err != nil {
+		return nil, err
+	}
+
 	producerConfig, err := buildProducerConfig(conf)
 	if err != nil {
 		return nil, err
@@ -145,18 +190,13 @@ func NewConsumerConfigBy(conf *Config) (*ConsumerConfig, error) {
 		return nil, fmt.Errorf("consumer config is required for Kafka consumer")
 	}
 
-	if conf.Consumer.Group == "" {
-		return nil, fmt.Errorf("consumer group is required for Kafka consumer")
-	}
-
-	topics := normalizeKafkaTopics(conf.Consumer.Topics)
-	if len(topics) == 0 {
-		return nil, fmt.Errorf("topics are required for Kafka consumer")
+	if err := conf.validateConsumer(); err != nil {
+		return nil, err
 	}
 
 	concurrency := conf.Consumer.Concurrency
 	if concurrency <= 0 {
-		concurrency = 1
+		concurrency = defaultConsumerConcurrency
 	}
 
 	consumerConfig, err := buildConsumerConfig(conf)
@@ -166,7 +206,7 @@ func NewConsumerConfigBy(conf *Config) (*ConsumerConfig, error) {
 
 	return &ConsumerConfig{
 		Brokers:        conf.Brokers,
-		Topics:         topics,
+		Topics:         normalizeKafkaTopics(conf.Consumer.Topics),
 		ConsumerGroup:  conf.Consumer.Group,
 		ConsumerConfig: consumerConfig,
 		Concurrency:    concurrency,
@@ -216,7 +256,7 @@ func buildConsumerConfig(conf *Config) (*sarama.Config, error) {
 func applyProducerSettings(sc *sarama.Config, p *ProducerSettings) {
 	sc.Producer.RequiredAcks = parseKafkaRequiredAcks(p.RequiredAcks)
 	sc.Producer.Compression = parseKafkaCompression(p.Compression)
-	sc.Producer.Retry.Max = defaultIfZero(p.MaxRetries, defaultProducerMaxRetries)
+	sc.Producer.Retry.Max = effectiveMaxRetries(p.MaxRetries)
 	sc.Producer.Retry.Backoff = time.Duration(defaultIfZero(p.RetryBackoffMs, defaultProducerRetryBackoffMs)) * time.Millisecond
 	sc.Producer.Idempotent = idempotenceEnabled(p.EnableIdempotence)
 	sc.Producer.MaxMessageBytes = defaultIfZero(p.MaxMessageBytes, defaultProducerMaxMessageBytes)
