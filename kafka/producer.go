@@ -2,15 +2,16 @@ package kafka
 
 import (
 	"fmt"
-	"sync"
 
 	"github.com/IBM/sarama"
 )
 
+// Producer publishes messages synchronously. It is safe for concurrent use:
+// the underlying Sarama sync producer is, so calls are not serialized and
+// concurrent publishers share its batching and in-flight requests.
 type Producer struct {
 	logger   Logger
 	producer sarama.SyncProducer
-	mu       sync.Mutex
 }
 
 func NewProducer(config *ProducerConfig, opts ...Options[*Producer]) (*Producer, error) {
@@ -35,10 +36,9 @@ func (p *Producer) PublishMessage(message Message) error {
 	return err
 }
 
+// PublishMessageWithMetadata is PublishMessage that also reports where the
+// message was written. It is safe for concurrent use.
 func (p *Producer) PublishMessageWithMetadata(message Message) (Metadata, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	if message.Topic == "" {
 		return Metadata{}, fmt.Errorf("kafka topic is required")
 	}
@@ -58,7 +58,7 @@ func (p *Producer) PublishMessageWithMetadata(message Message) (Metadata, error)
 	}
 
 	// Monitoring: message published to the broker.
-	p.logger.Infof("kafka published message: topic=%s key=%s partition=%d offset=%d", message.Topic, message.Key, partition, offset)
+	debugf(p.logger, "kafka published message: topic=%s key=%s partition=%d offset=%d", message.Topic, message.Key, partition, offset)
 
 	return Metadata{
 		Topic:     message.Topic,
@@ -68,13 +68,17 @@ func (p *Producer) PublishMessageWithMetadata(message Message) (Metadata, error)
 	}, nil
 }
 
+// PublishMessages sends messages in one call, to any mix of topics. Every
+// message is validated before anything is sent, so an invalid message sends
+// none of them.
+//
+// A send failure returns a sarama.ProducerErrors listing the messages that
+// failed; the others in the call may already have been written. Retrying the
+// whole call after such an error can duplicate the messages that succeeded.
 func (p *Producer) PublishMessages(messages []Message) error {
 	if len(messages) == 0 {
 		return nil
 	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	kafkaMessages := make([]*sarama.ProducerMessage, 0, len(messages))
 	for _, message := range messages {
@@ -99,7 +103,9 @@ func (p *Producer) PublishMessages(messages []Message) error {
 	}
 
 	// Monitoring: message batch published to the broker.
-	p.logger.Infof("kafka published message batch: topic=%s count=%d", messages[0].Topic, len(messages))
+	if debugEnabled(p.logger) {
+		debugf(p.logger, "kafka published message batch: topics=%d count=%d", distinctTopics(messages), len(messages))
+	}
 
 	return nil
 }
@@ -112,4 +118,13 @@ func (p *Producer) Close() error {
 	}
 
 	return nil
+}
+
+func distinctTopics(messages []Message) int {
+	topics := make(map[string]struct{}, 1)
+	for _, message := range messages {
+		topics[message.Topic] = struct{}{}
+	}
+
+	return len(topics)
 }
