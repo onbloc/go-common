@@ -81,6 +81,10 @@ err = publisher.PublishMessage(kafka.Message{Topic: "orders", Key: "order-1", Va
 
 `Message.Value` is `[]byte`, so any payload encoding (JSON, protobuf, raw binary) works. A nil `Value` publishes a Kafka tombstone (a null-value record, typically used to mark a key for deletion on a compacted topic).
 
+`Message.Headers` carries optional record headers (for example a trace ID or schema version). Keys must not be empty; they may repeat and keep their order. Consumers receive them, along with the record `Timestamp`, in `Metadata`. The timestamp is the producer's create time or the broker's log-append time, depending on the topic's `message.timestamp.type`.
+
+`PublishMessage` and `PublishMessages` are safe to call concurrently. `PublishMessages` accepts messages for any mix of topics and validates all of them before sending any; if some fail to send, the returned error (a `sarama.ProducerErrors`) lists the failed messages while others may already be written, so retrying the whole call can duplicate them.
+
 Call `publisher.Close()` on shutdown to close the underlying producer.
 
 ### Consuming
@@ -97,7 +101,7 @@ err = subscriber.StartListening(ctx, func(message []byte, meta kafka.Metadata, c
 })
 ```
 
-`StartBatchListening` groups messages up to `BatchConfig.MaxMessages` or until `FlushInterval` elapses, whichever comes first, and commits the offset once per batch:
+`StartBatchListening` groups messages up to `BatchConfig.MaxMessages` or until `FlushInterval` elapses, whichever comes first, and `commit` stores the offset once per batch:
 
 ```go
 err = subscriber.StartBatchListening(ctx, conf.Kafka.Consumer.BatchConfig(), func(messages []kafka.BatchMessage, commit func() error) error {
@@ -106,11 +110,60 @@ err = subscriber.StartBatchListening(ctx, conf.Kafka.Consumer.BatchConfig(), fun
 })
 ```
 
-When `Config.Consumer.Concurrency` is greater than 1, `NewSubscriber` returns a `*kafka.ConcurrentConsumer` that runs that many consumer instances in the same group to process partitions in parallel. Call `subscriber.Close()` on shutdown to stop consuming and close the consumer group(s).
+When `Config.Consumer.Concurrency` is greater than 1, `NewSubscriber` returns a `*kafka.ConcurrentConsumer` that runs that many consumer instances in the same group. Call `subscriber.Close()` on shutdown to stop consuming and close the consumer group(s).
+
+### Delivery semantics
+
+Delivery is at-least-once. The consumer never commits offsets on its own (auto-commit is off): the handler's `commit` function does.
+
+- `commit()` stores the consumer group's offset for the messages of the batch (one message with `StartListening`), so they are not delivered again. It also covers every earlier offset of that partition and cannot be undone: call it last, after processing has succeeded.
+- A handler that returns without calling `commit()` leaves its messages uncommitted. They are delivered again after a restart or rebalance, unless a later `commit()` on the same partition covers them.
+- `commit()` always returns `nil`: Sarama does not report commit failures, so a failed commit shows up as a redelivery rather than an error.
+- When a rebalance or shutdown ends the session, a batch that was still filling is dropped without a commit and delivered again to whichever consumer takes the partition next. This is not reported as an error.
+- A crash between processing and `commit()` delivers the batch again, so handlers must be safe to run twice on the same messages.
+- `StartListening` and `StartBatchListening` return the context's error (`context.Canceled`) when stopped through `ctx` or `Close()`; treat that as a normal stop.
+
+### Handler errors
+
+When a handler returns an error, the module logs it through `Logger.Errorf` and returns it from the partition's claim. Sarama ends the whole group session as soon as any claim returns, so every partition of this consumer stops, the consumer joins the group again, and the uncommitted batch is delivered again. A message that can never succeed therefore blocks its partition and is retried in a loop.
+
+There is no built-in retry, skip, or dead-letter policy; decide in the handler:
+
+```go
+err = subscriber.StartListening(ctx, func(message []byte, meta kafka.Metadata, commit func() error) error {
+    if err := process(ctx, message); err != nil {
+        if isPermanent(err) {
+            log.Errorf("dropping %s[%d]@%d: %v", meta.Topic, meta.Partition, meta.Offset, err)
+            // publish to a dead-letter topic here if the message must be kept
+            return commit() // skip it
+        }
+
+        return err // transient: deliver again
+    }
+
+    return commit()
+})
+```
+
+With `StartBatchListening`, `commit` commits the whole batch, so skipping drops every message in it; retry or split such a batch yourself.
+
+### Ordering and message keys
+
+Kafka orders messages only within a partition. The default partitioner hashes `Message.Key`, so messages with the same key go to the same partition and are consumed in publish order. A message with an empty key has no such guarantee: it goes to a random partition and has no ordering relative to other messages. To process messages strictly in order, publish them under one key; one consumer in the group then handles them at a time.
+
+### Concurrency
+
+Within a consumer group each partition is read by one member, so parallelism is limited by the number of partitions: a `Concurrency` above the partition count only adds idle members, and it does not speed up a single partition. Sarama runs one goroutine per assigned topic partition, so a consumer that owns several partitions calls your handler from several goroutines at once; the handler must be safe for concurrent use. A batch passed to a `BatchMessageHandler` always comes from one topic partition.
+
+### Message size
+
+`producer.max_message_bytes` defaults to 5 MiB, but Kafka brokers accept about 1 MB per message by default (`message.max.bytes`). Raise the broker limit (and the topic's `max.message.bytes`) to match, or the broker rejects the publish with a message-too-large error. Raise `consumer.max_fetch_bytes` as well if you consume large messages.
 
 ### Logging
 
 `log` above is any value with `Infof(format string, args ...any)` and `Errorf(format string, args ...any)` methods (`kafka.Logger`); most application loggers satisfy this without an adapter. Pass `nil` to discard log output.
+
+Per-message and per-batch activity (published, received, processed) is logged at debug level only. It is emitted when the logger also has `Debugf(format string, args ...any)` (`kafka.DebugLogger`) and dropped otherwise, so a logger with only `Infof`/`Errorf` stays quiet on the hot path. Failures are always logged through `Errorf`.
 
 ### Security
 

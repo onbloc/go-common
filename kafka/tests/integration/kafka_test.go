@@ -2,10 +2,12 @@ package integration_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -200,6 +202,42 @@ func TestKafkaIntegration_MessageOrder(t *testing.T) {
 		}
 	}
 	t.Log("Message order verified successfully")
+}
+
+// A handler error ends the group session and the uncommitted message is
+// delivered again; this is the behavior the README documents.
+func TestKafkaIntegration_HandlerErrorRedeliversMessage(t *testing.T) {
+	env := newTestEnv(t, "test-topic-redeliver", "test-consumer-group-redeliver")
+	env.publishMessage(t, "again")
+
+	ctx, cancel := context.WithTimeout(context.Background(), largeTimeout)
+	defer cancel()
+
+	var calls atomic.Int32
+	delivered := make(chan struct{})
+	go func() {
+		err := env.consumer.StartListening(ctx, func(message []byte, _ commonkafka.Metadata, commit func() error) error {
+			if calls.Add(1) == 1 {
+				return errors.New("first attempt fails")
+			}
+			close(delivered)
+
+			return commit()
+		})
+		if err != nil && ctx.Err() == nil {
+			t.Logf("listener error: %v", err)
+		}
+	}()
+
+	select {
+	case <-delivered:
+	case <-ctx.Done():
+		t.Fatal("the message was not delivered again after the handler error")
+	}
+
+	if got := calls.Load(); got != 2 {
+		t.Errorf("handler calls = %d, want 2", got)
+	}
 }
 
 func TestKafkaIntegration_CommitStoresOffset(t *testing.T) {
