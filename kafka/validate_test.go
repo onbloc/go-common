@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/IBM/sarama"
 )
 
 const unsupportedCompression = "brotli"
@@ -222,5 +224,100 @@ func TestNewProducerConfigByIgnoresInvalidConsumerSection(t *testing.T) {
 
 	if _, err := NewProducerConfigBy(conf); err != nil {
 		t.Fatalf("producer must not depend on consumer settings: %v", err)
+	}
+}
+
+func TestAcksMapToSarama(t *testing.T) {
+	tests := map[string]sarama.RequiredAcks{
+		"0":   sarama.NoResponse,
+		"1":   sarama.WaitForLocal,
+		"all": sarama.WaitForAll,
+		"-1":  sarama.WaitForAll, // Kafka treats -1 as all
+		"":    sarama.WaitForAll, // unset means the default
+	}
+
+	for acks, want := range tests {
+		t.Run("acks="+acks, func(t *testing.T) {
+			conf := validConfig()
+			conf.Producer.Acks = acks
+			// An idempotent producer requires acks=all, which would hide the value under test.
+			off := false
+			conf.Producer.EnableIdempotence = &off
+
+			producerConfig, err := NewProducerConfigBy(conf)
+			if err != nil {
+				t.Fatalf("NewProducerConfigBy() error = %v, want %q accepted", err, acks)
+			}
+			if got := producerConfig.ProducerConfig.Producer.RequiredAcks; got != want {
+				t.Fatalf("Sarama RequiredAcks = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestAcksRejectsOtherValues(t *testing.T) {
+	for _, acks := range []string{"2", "quorum", "ALL", "-2", "none", "local"} {
+		conf := validConfig()
+		conf.Producer.Acks = acks
+
+		err := conf.Validate()
+		if err == nil || !strings.Contains(err.Error(), "producer.acks") || !strings.Contains(err.Error(), "want one of: 0, 1, all, -1") {
+			t.Fatalf("Validate() with acks %q error = %v, want it rejected with the accepted values listed", acks, err)
+		}
+	}
+}
+
+// An idempotent producer (the default) needs acks=all and one in-flight request.
+// A config that asks for something else is rejected, not silently overridden.
+func TestIdempotenceConflictsAreRejectedNotOverridden(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*ProducerSettings)
+		want   string
+	}{
+		{"acks 0", func(p *ProducerSettings) { p.Acks = "0" }, "producer.acks"},
+		{"acks 1", func(p *ProducerSettings) { p.Acks = "1" }, "producer.acks"},
+		{"more in-flight requests", func(p *ProducerSettings) { p.MaxOpenRequests = 5 }, "producer.max_open_requests"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conf := validConfig()
+			tt.mutate(conf.Producer)
+
+			err := conf.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), "enable_idempotence") {
+				t.Fatalf("Validate() error = %v, want it to name %s and the idempotence switch", err, tt.want)
+			}
+			if _, err = NewProducerConfigBy(conf); err == nil {
+				t.Fatal("NewProducerConfigBy() expected the same conflict to be rejected")
+			}
+
+			// With idempotence off the setting is applied as written.
+			off := false
+			conf.Producer.EnableIdempotence = &off
+			producerConfig, err := NewProducerConfigBy(conf)
+			if err != nil {
+				t.Fatalf("NewProducerConfigBy() with idempotence off error = %v", err)
+			}
+			sc := producerConfig.ProducerConfig
+			if tt.want == "producer.acks" && sc.Producer.RequiredAcks == sarama.WaitForAll {
+				t.Fatal("acks was overridden to all although idempotence is off")
+			}
+			if tt.want == "producer.max_open_requests" && sc.Net.MaxOpenRequests != 5 {
+				t.Fatalf("MaxOpenRequests = %d, want 5", sc.Net.MaxOpenRequests)
+			}
+		})
+	}
+}
+
+func TestIdempotentProducerAcceptsAcksAllInEitherSpelling(t *testing.T) {
+	for _, acks := range []string{"", "all", "-1"} {
+		conf := validConfig()
+		conf.Producer.Acks = acks
+
+		if err := conf.Validate(); err != nil {
+			t.Fatalf("Validate() with acks %q error = %v, want it accepted while idempotent", acks, err)
+		}
 	}
 }

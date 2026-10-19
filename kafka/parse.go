@@ -2,17 +2,17 @@ package kafka
 
 import "github.com/IBM/sarama"
 
-// parseKafkaAcks maps a Acks spelling to Sarama's value. An
-// empty or unknown value is the default, acks=all; Config.Validate rejects the
-// unknown ones before they get here.
-func parseKafkaAcks(value Acks) sarama.RequiredAcks {
-	for _, entry := range acksSpellings {
-		if entry.spelling == value {
-			return entry.value
-		}
+// parseKafkaAcks maps an acks setting to Sarama's value. Empty is the default,
+// acks=all, and Config.Validate rejects unknown values before they get here.
+func parseKafkaAcks(value string) sarama.RequiredAcks {
+	switch value {
+	case "0":
+		return sarama.NoResponse
+	case "1":
+		return sarama.WaitForLocal
+	default:
+		return sarama.WaitForAll
 	}
-
-	return sarama.WaitForAll
 }
 
 func parseKafkaCompression(value string) sarama.CompressionCodec {

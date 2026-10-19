@@ -81,7 +81,7 @@ Unset numeric fields resolve to their defaults. `max_retries` and `enable_idempo
 | `1` | the partition leader to write it |
 | `all` (default), or `-1` | every in-sync replica |
 
-Any other value is rejected by `Validate`. An idempotent producer (`enable_idempotence`, on by default) needs acks `all` and one in-flight request per connection (`max_open_requests: 1`, which this client requires for idempotence). A config that asks for `acks` `0` or `1`, or for a larger `max_open_requests`, while idempotence is on is rejected with an error that names `enable_idempotence`; it is never silently overridden. Set `enable_idempotence: false` to use those values. In YAML or an environment variable an unquoted `1` works, and in code the typed constants `kafka.AcksNone`, `kafka.AcksLeader` and `kafka.AcksAll` are available.
+Any other value is rejected by `Validate`. An idempotent producer (`enable_idempotence`, on by default) needs acks `all` and one in-flight request per connection (`max_open_requests: 1`, which this client requires for idempotence). A config that asks for `acks` `0` or `1`, or for a larger `max_open_requests`, while idempotence is on is rejected with an error that names `enable_idempotence`; it is never silently overridden. Set `enable_idempotence: false` to use those values. In YAML or an environment variable an unquoted `1` works; in code, `Acks` is a plain string (`"0"`, `"1"`, `"all"`).
 
 ### Publishing
 

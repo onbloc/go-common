@@ -91,7 +91,7 @@ func (c *Config) validateCommon() []error {
 func (p *ProducerSettings) validate() []error {
 	var errs []error
 
-	errs = appendUnlessOneOf(errs, "producer.acks", string(p.Acks), acksNames()...)
+	errs = appendUnlessOneOf(errs, "producer.acks", p.Acks, "0", "1", "all", "-1")
 	errs = appendUnlessOneOf(errs, "producer.compression", p.Compression, "none", "gzip", "snappy", "lz4", "zstd")
 	errs = appendIfNegative(errs, "producer.retry_backoff_ms", p.RetryBackoffMs)
 	errs = appendIfNegative(errs, "producer.max_open_requests", p.MaxOpenRequests)

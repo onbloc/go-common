@@ -13,6 +13,7 @@ import (
 // keeps the two in sync. They are applied by DefaultConfig, and as a fallback
 // when a field is left unset in a Config built without a loader.
 const (
+	defaultAcks            = "all"
 	defaultCompression     = "lz4"
 	defaultAutoOffsetReset = "earliest"
 	defaultSecurityProto   = protocolPlaintext
@@ -41,7 +42,7 @@ func DefaultConfig() *Config {
 
 	return &Config{
 		Producer: &ProducerSettings{
-			Acks:              AcksAll,
+			Acks:              defaultAcks,
 			Compression:       defaultCompression,
 			MaxRetries:        &maxRetries,
 			RetryBackoffMs:    defaultProducerRetryBackoffMs,
@@ -79,7 +80,10 @@ type Config struct {
 }
 
 type ProducerSettings struct {
-	Acks            Acks   `mapstructure:"acks" default:"all"`
+	// Acks is Kafka's producer "acks": "0" (no acknowledgement), "1" (partition
+	// leader only) or "all" (every in-sync replica; "-1" is the same). Unset
+	// means "all". An idempotent producer, the default, requires "all".
+	Acks            string `mapstructure:"acks" default:"all"`
 	Compression     string `mapstructure:"compression" default:"lz4"`
 	RetryBackoffMs  int    `mapstructure:"retry_backoff_ms" default:"100"`
 	MaxOpenRequests int    `mapstructure:"max_open_requests" default:"1"`
