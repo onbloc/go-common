@@ -72,11 +72,14 @@ func TestProducerPublishesConcurrently(t *testing.T) {
 	}
 }
 
-// recordingLogger records every line with its level.
+// recordingLogger records every line with its level. It has only Errorf and
+// Debugf, which is all a Logger needs.
 type recordingLogger struct {
 	mu    sync.Mutex
 	lines []string
 }
+
+var _ Logger = (*recordingLogger)(nil)
 
 func (l *recordingLogger) add(format string, args ...any) {
 	l.mu.Lock()
@@ -85,7 +88,6 @@ func (l *recordingLogger) add(format string, args ...any) {
 	l.lines = append(l.lines, fmt.Sprintf(format, args...))
 }
 
-func (l *recordingLogger) Infof(format string, args ...any)  { l.add("INFO "+format, args...) }
 func (l *recordingLogger) Errorf(format string, args ...any) { l.add("ERROR "+format, args...) }
 func (l *recordingLogger) Debugf(format string, args ...any) { l.add("DEBUG "+format, args...) }
 

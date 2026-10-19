@@ -127,6 +127,17 @@ err = subscriber.StartBatchListening(ctx, conf.Kafka.Consumer.BatchConfig(), fun
 
 When `Config.Consumer.Concurrency` is greater than 1, `NewSubscriber` returns a `*kafka.ConcurrentConsumer` that runs that many consumer instances in the same group. Call `subscriber.Close()` on shutdown to stop consuming and close the consumer group(s).
 
+### Where a new consumer group starts
+
+A consumer group that has no committed offset yet (a new group, or one whose offsets expired) starts according to `consumer.auto_offset_reset`:
+
+| Value | Starts at |
+| --- | --- |
+| `earliest` (default here) | the oldest message still in the topic, so a new group replays everything retained |
+| `latest` | the end of the topic, so a new group only sees messages published after it joined |
+
+The default is `earliest`. This differs from Kafka's own default for `auto.offset.reset`, which is `latest`; it is the safer choice for a service that must not skip messages the first time it starts, and it means a new group name (or a renamed `consumer.group`) re-reads the whole topic. Set `latest` to read only new messages. Once a group has a committed offset, this setting is not used. Kafka also accepts `none` (fail when there is no offset), which this module does not support.
+
 ### Delivery semantics
 
 Delivery is at-least-once. The consumer never commits offsets on its own (auto-commit is off): the handler's `commit` function does.
@@ -194,7 +205,7 @@ Within a consumer group each partition is read by one member, so parallelism is 
 
 ### Logging
 
-`log` above is any value with `Infof`, `Errorf` and `Debugf` methods of the form `(format string, args ...any)` (`kafka.Logger`); most application loggers satisfy this without an adapter. Pass `nil` to discard log output.
+`log` above is any value with `Errorf` and `Debugf` methods of the form `(format string, args ...any)` (`kafka.Logger`); most application loggers satisfy this without an adapter. Pass `nil` to discard log output.
 
 Per-message and per-batch activity (published, received, processed) is logged at debug level only, so it stays quiet at normal log levels. Failures are logged through `Errorf`.
 

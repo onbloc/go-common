@@ -5,14 +5,12 @@ package kafka
 // adapter. Per-message and per-batch activity is logged through Debugf;
 // failures are logged through Errorf.
 type Logger interface {
-	Infof(format string, args ...any)
 	Errorf(format string, args ...any)
 	Debugf(format string, args ...any)
 }
 
 type noopLogger struct{}
 
-func (noopLogger) Infof(string, ...any)  {}
 func (noopLogger) Errorf(string, ...any) {}
 func (noopLogger) Debugf(string, ...any) {}
 
