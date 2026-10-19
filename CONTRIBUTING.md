@@ -144,6 +144,15 @@ module-b/v1.0.0
 
 Releasing one module does not change another module's version. A release currently requires only an immutable annotated Git tag on a commit merged into `main`; no artifact upload is required.
 
+For the first public `config` release:
+
+1. Merge the license and public documentation into `main`, and confirm CI passes.
+2. Review all branches and repository history for material that must remain private, then make the repository public.
+3. Create and push the annotated tag `config/v0.1.0` on the reviewed `main` commit, not a repository-root `v0.1.0` tag.
+4. From a fresh Go module without GitHub credentials or private-module overrides, verify `go get github.com/onbloc/go-common/config@v0.1.0` and that the downloaded module includes `LICENSE`.
+
+The repository-root `LICENSE` applies to its modules. Go includes this license in subdirectory module downloads when the module does not contain its own `LICENSE`.
+
 For a v2 or later incompatible release, follow Go's major-version module rule:
 
 ```text
