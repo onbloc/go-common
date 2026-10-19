@@ -91,18 +91,18 @@ if err != nil {
     return err
 }
 
-err = subscriber.StartListening(ctx, func(message []byte, meta kafka.Metadata, ack func() error) error {
+err = subscriber.StartListening(ctx, func(message []byte, meta kafka.Metadata, commit func() error) error {
     // handle message
-    return ack()
+    return commit()
 })
 ```
 
 `StartBatchListening` groups messages up to `BatchConfig.MaxMessages` or until `FlushInterval` elapses, whichever comes first, and commits the offset once per batch:
 
 ```go
-err = subscriber.StartBatchListening(ctx, conf.Kafka.Consumer.BatchConfig(), func(messages []kafka.BatchMessage, ack func() error) error {
+err = subscriber.StartBatchListening(ctx, conf.Kafka.Consumer.BatchConfig(), func(messages []kafka.BatchMessage, commit func() error) error {
     // handle messages
-    return ack()
+    return commit()
 })
 ```
 

@@ -38,9 +38,9 @@ func NewConsumer(config *ConsumerConfig, opts ...Options[*Consumer]) (*Consumer,
 }
 
 func (c *Consumer) StartListening(ctx context.Context, handler MessageHandler) error {
-	return c.StartBatchListening(ctx, BatchConfig{MaxMessages: 1}, func(messages []BatchMessage, ack func() error) error {
+	return c.StartBatchListening(ctx, BatchConfig{MaxMessages: 1}, func(messages []BatchMessage, commit func() error) error {
 		for _, message := range messages {
-			if err := handler(message.Value, message.Metadata, ack); err != nil {
+			if err := handler(message.Value, message.Metadata, commit); err != nil {
 				return err
 			}
 		}
@@ -130,9 +130,9 @@ func NewConcurrentConsumer(config *ConsumerConfig, opts ...Options[*Consumer]) (
 }
 
 func (c *ConcurrentConsumer) StartListening(ctx context.Context, handler MessageHandler) error {
-	return c.StartBatchListening(ctx, BatchConfig{MaxMessages: 1}, func(messages []BatchMessage, ack func() error) error {
+	return c.StartBatchListening(ctx, BatchConfig{MaxMessages: 1}, func(messages []BatchMessage, commit func() error) error {
 		for _, message := range messages {
-			if err := handler(message.Value, message.Metadata, ack); err != nil {
+			if err := handler(message.Value, message.Metadata, commit); err != nil {
 				return err
 			}
 		}
@@ -282,7 +282,7 @@ func (h *batchConsumerHandler) consumeBatch(session sarama.ConsumerGroupSession,
 	// Monitoring: message batch received from the broker (before handling).
 	debugf(h.logger, "kafka received message batch: topic=%s count=%d offsets=%d..%d", topic, len(messages), firstOffset, lastOffset)
 
-	ack := func() error {
+	commit := func() error {
 		for _, msg := range messages {
 			session.MarkMessage(msg, "")
 		}
@@ -291,7 +291,7 @@ func (h *batchConsumerHandler) consumeBatch(session sarama.ConsumerGroupSession,
 		return nil
 	}
 
-	if err := h.metadataHandler(batchMessages, ack); err != nil {
+	if err := h.metadataHandler(batchMessages, commit); err != nil {
 		h.logger.Errorf("Failed to process message batch: topic=%s count=%d offsets=%d..%d error=%v", topic, len(messages), firstOffset, lastOffset, err)
 
 		return err

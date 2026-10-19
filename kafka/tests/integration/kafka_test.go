@@ -90,10 +90,10 @@ func TestKafkaIntegration_HeadersAndTimestampRoundTrip(t *testing.T) {
 
 	received := make(chan commonkafka.Metadata, 1)
 	go func() {
-		err := env.consumer.StartListening(ctx, func(_ []byte, meta commonkafka.Metadata, ack func() error) error {
+		err := env.consumer.StartListening(ctx, func(_ []byte, meta commonkafka.Metadata, commit func() error) error {
 			received <- meta
 
-			return ack()
+			return commit()
 		})
 		if err != nil && ctx.Err() == nil {
 			t.Logf("listener error: %v", err)
@@ -202,25 +202,25 @@ func TestKafkaIntegration_MessageOrder(t *testing.T) {
 	t.Log("Message order verified successfully")
 }
 
-func TestKafkaIntegration_AckCommitsOffset(t *testing.T) {
-	topic := "test-topic-ack"
-	consumerGroup := "test-consumer-group-ack"
+func TestKafkaIntegration_CommitStoresOffset(t *testing.T) {
+	topic := "test-topic-commit"
+	consumerGroup := "test-consumer-group-commit"
 	env := newTestEnv(t, topic, consumerGroup)
 
-	testMessage := "ack-test-message"
+	testMessage := "commit-test-message"
 	env.publishMessage(t, testMessage)
 
 	received := env.consumeOne(t, defaultTimeout)
 	if received != testMessage {
 		t.Errorf("message mismatch: expected %q, got %q", testMessage, received)
 	}
-	t.Log("Message received and acked successfully")
+	t.Log("Message received and committed successfully")
 
 	env.consumer.Close()
 
 	env2 := newTestEnv(t, topic, consumerGroup)
 
-	newMessage := "new-message-after-ack"
+	newMessage := "new-message-after-commit"
 	env2.publishMessage(t, newMessage)
 
 	secondReceived := env2.consumeOne(t, defaultTimeout)
@@ -245,9 +245,9 @@ func TestKafkaIntegration_StartListeningStopsOnContextCancelAndResumesWithNewCon
 	listenerErr := make(chan error, 1)
 
 	go func() {
-		listenerErr <- env.consumer.StartListening(listenerCtx, func(message []byte, _ commonkafka.Metadata, ack func() error) error {
+		listenerErr <- env.consumer.StartListening(listenerCtx, func(message []byte, _ commonkafka.Metadata, commit func() error) error {
 			processedMessages <- string(message)
-			if err := ack(); err != nil {
+			if err := commit(); err != nil {
 				return err
 			}
 
@@ -406,10 +406,10 @@ func (e *testEnv) consumeOne(t *testing.T, timeout time.Duration) string {
 	done := make(chan struct{})
 
 	go func() {
-		if err := e.consumer.StartListening(ctx, func(message []byte, _ commonkafka.Metadata, ack func() error) error {
+		if err := e.consumer.StartListening(ctx, func(message []byte, _ commonkafka.Metadata, commit func() error) error {
 			received = string(message)
 			close(done)
-			return ack()
+			return commit()
 		}); err != nil && ctx.Err() == nil {
 			t.Logf("listener error: %v", err)
 		}
@@ -435,13 +435,13 @@ func (e *testEnv) consumeN(t *testing.T, count int, timeout time.Duration) []str
 	done := make(chan struct{})
 
 	go func() {
-		if err := e.consumer.StartListening(ctx, func(message []byte, _ commonkafka.Metadata, ack func() error) error {
+		if err := e.consumer.StartListening(ctx, func(message []byte, _ commonkafka.Metadata, commit func() error) error {
 			mu.Lock()
 			received = append(received, string(message))
 			n := len(received)
 			mu.Unlock()
 
-			if err := ack(); err != nil {
+			if err := commit(); err != nil {
 				return err
 			}
 

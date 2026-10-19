@@ -62,9 +62,21 @@ type Subscriber interface {
 	Close() error
 }
 
+// The handler types receive a commit function. Calling commit stores the
+// consumer group's offset for every message of the batch (one message for
+// StartListening), marking them as processed. The consumer never commits on
+// its own, so a message whose batch is not committed is delivered again after a
+// restart or rebalance.
+//
+// Call commit last, once processing has succeeded: it cannot be undone, so
+// returning an error after commit does not bring the messages back. Committing
+// a batch also commits every earlier offset of that partition. commit
+// currently always returns nil, because Sarama does not report commit failures.
 type (
-	MessageHandler      func(message []byte, metadata Metadata, ack func() error) error
-	BatchMessageHandler func(messages []BatchMessage, ack func() error) error
+	// MessageHandler handles one message.
+	MessageHandler func(message []byte, metadata Metadata, commit func() error) error
+	// BatchMessageHandler handles a batch of messages from one topic partition.
+	BatchMessageHandler func(messages []BatchMessage, commit func() error) error
 )
 
 func (c BatchConfig) normalized() BatchConfig {

@@ -86,14 +86,14 @@ func newBatchRecorder() *batchRecorder {
 	return &batchRecorder{calls: make(chan struct{}, 16)}
 }
 
-// handler records each batch and acks it, like a well-behaved application.
-func (r *batchRecorder) handler(messages []BatchMessage, ack func() error) error {
+// handler records each batch and commits it, like a well-behaved application.
+func (r *batchRecorder) handler(messages []BatchMessage, commit func() error) error {
 	r.mu.Lock()
 	r.batches = append(r.batches, append([]BatchMessage(nil), messages...))
 	r.mu.Unlock()
 	r.calls <- struct{}{}
 
-	return ack()
+	return commit()
 }
 
 func (r *batchRecorder) waitForCall(t *testing.T) {
@@ -264,7 +264,7 @@ func TestConsumeClaimReturnsHandlerErrorWithoutCommitting(t *testing.T) {
 	assertMarked(t, session, nil, 0)
 }
 
-func TestConsumeClaimDoesNotCommitUnlessHandlerAcks(t *testing.T) {
+func TestConsumeClaimDoesNotCommitUnlessHandlerCommits(t *testing.T) {
 	session := newFakeSession(t.Context())
 	claim := newFakeClaim()
 	called := make(chan struct{}, 1)
