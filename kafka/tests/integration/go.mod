@@ -1,4 +1,4 @@
-module github.com/onbloc/go-common/kafka/integration
+module github.com/onbloc/go-common/kafka/tests/integration
 
 go 1.25.0
 
@@ -84,4 +84,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/onbloc/go-common/kafka => ..
+replace github.com/onbloc/go-common/kafka => ../..
