@@ -33,7 +33,7 @@
 // key are different in Kafka and stay different here.
 //
 // A Logger may be supplied through WithProducerLogger/WithConsumerLogger; any
-// type with Infof/Errorf methods satisfies it. A logger that also has Debugf
-// (DebugLogger) receives per-message activity at debug level. Without a
-// logger, log output is discarded.
+// type with Infof, Errorf and Debugf methods satisfies it. Per-message
+// activity is logged at debug level. Without a logger, log output is
+// discarded.
 package kafka

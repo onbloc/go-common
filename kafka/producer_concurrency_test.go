@@ -72,6 +72,7 @@ func TestProducerPublishesConcurrently(t *testing.T) {
 	}
 }
 
+// recordingLogger records every line with its level.
 type recordingLogger struct {
 	mu    sync.Mutex
 	lines []string
@@ -86,39 +87,28 @@ func (l *recordingLogger) add(format string, args ...any) {
 
 func (l *recordingLogger) Infof(format string, args ...any)  { l.add("INFO "+format, args...) }
 func (l *recordingLogger) Errorf(format string, args ...any) { l.add("ERROR "+format, args...) }
-
-type recordingDebugLogger struct{ recordingLogger }
-
-func (l *recordingDebugLogger) Debugf(format string, args ...any) { l.add("DEBUG "+format, args...) }
+func (l *recordingLogger) Debugf(format string, args ...any) { l.add("DEBUG "+format, args...) }
 
 func TestPublishLogsOnlyAtDebugLevel(t *testing.T) {
-	publish := func(l Logger) {
-		p := &Producer{producer: &fakeSyncProducer{}, logger: l}
-		if err := p.PublishMessage(Message{Topic: "a", Value: []byte("v")}); err != nil {
-			t.Fatalf("PublishMessage() error = %v", err)
-		}
-		if err := p.PublishMessages([]Message{{Topic: "a"}, {Topic: "b"}, {Topic: "b"}}); err != nil {
-			t.Fatalf("PublishMessages() error = %v", err)
-		}
+	logger := &recordingLogger{}
+	p := &Producer{producer: &fakeSyncProducer{}, logger: logger}
+
+	if err := p.PublishMessage(Message{Topic: "a", Value: []byte("v")}); err != nil {
+		t.Fatalf("PublishMessage() error = %v", err)
+	}
+	if err := p.PublishMessages([]Message{{Topic: "a"}, {Topic: "b"}, {Topic: "b"}}); err != nil {
+		t.Fatalf("PublishMessages() error = %v", err)
 	}
 
-	plain := &recordingLogger{}
-	publish(plain)
-	if len(plain.lines) != 0 {
-		t.Fatalf("a logger without Debugf received %v, want no output", plain.lines)
+	if len(logger.lines) != 2 {
+		t.Fatalf("lines = %v, want one per publish call", logger.lines)
 	}
-
-	debug := &recordingDebugLogger{}
-	publish(debug)
-	if len(debug.lines) != 2 {
-		t.Fatalf("debug logger lines = %v, want 2", debug.lines)
-	}
-	for _, line := range debug.lines {
+	for _, line := range logger.lines {
 		if !strings.HasPrefix(line, "DEBUG ") {
 			t.Fatalf("line %q not logged at debug level", line)
 		}
 	}
-	if want := "topics=2 count=3"; !strings.Contains(debug.lines[1], want) {
-		t.Fatalf("batch line = %q, want it to contain %q", debug.lines[1], want)
+	if want := "count=3"; !strings.Contains(logger.lines[1], want) {
+		t.Fatalf("batch line = %q, want it to contain %q", logger.lines[1], want)
 	}
 }

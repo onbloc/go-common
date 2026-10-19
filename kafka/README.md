@@ -70,13 +70,13 @@ Unset numeric fields resolve to their defaults. `max_retries` and `enable_idempo
 
 ### Producer acknowledgements
 
-`producer.acks` is Kafka's `acks` setting: how many broker acknowledgements a publish waits for before it succeeds. Use the Kafka values; `none` and `local` are accepted as aliases.
+`producer.acks` is Kafka's `acks` setting: how many broker acknowledgements a publish waits for before it succeeds.
 
-| Value | Alias | Waits for |
-| --- | --- | --- |
-| `0` | `none` | nothing; a message can be lost without the producer noticing |
-| `1` | `local` | the partition leader to write it |
-| `all` (default) | `-1` | every in-sync replica |
+| Value | Waits for |
+| --- | --- |
+| `0` | nothing; a message can be lost without the producer noticing |
+| `1` | the partition leader to write it |
+| `all` (default), or `-1` | every in-sync replica |
 
 Any other value is rejected by `Validate`. An idempotent producer (`enable_idempotence`, on by default) always uses `all`, whatever is set here; turn idempotence off to use `0` or `1`. In YAML or an environment variable an unquoted `1` works, and in code the typed constants `kafka.AcksNone`, `kafka.AcksLeader` and `kafka.AcksAll` are available.
 
@@ -191,9 +191,9 @@ Within a consumer group each partition is read by one member, so parallelism is 
 
 ### Logging
 
-`log` above is any value with `Infof(format string, args ...any)` and `Errorf(format string, args ...any)` methods (`kafka.Logger`); most application loggers satisfy this without an adapter. Pass `nil` to discard log output.
+`log` above is any value with `Infof`, `Errorf` and `Debugf` methods of the form `(format string, args ...any)` (`kafka.Logger`); most application loggers satisfy this without an adapter. Pass `nil` to discard log output.
 
-Per-message and per-batch activity (published, received, processed) is logged at debug level only. It is emitted when the logger also has `Debugf(format string, args ...any)` (`kafka.DebugLogger`) and dropped otherwise, so a logger with only `Infof`/`Errorf` stays quiet on the hot path. Failures are always logged through `Errorf`.
+Per-message and per-batch activity (published, received, processed) is logged at debug level only, so it stays quiet at normal log levels. Failures are logged through `Errorf`.
 
 ### Security
 

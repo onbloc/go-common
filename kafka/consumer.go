@@ -299,7 +299,7 @@ func (h *batchConsumerHandler) consumeBatch(session sarama.ConsumerGroupSession,
 	lastOffset := messages[len(messages)-1].Offset
 
 	// Monitoring: message batch received from the broker (before handling).
-	debugf(h.logger, "kafka received message batch: topic=%s count=%d offsets=%d..%d", topic, len(messages), firstOffset, lastOffset)
+	h.logger.Debugf("kafka received message batch: topic=%s count=%d offsets=%d..%d", topic, len(messages), firstOffset, lastOffset)
 
 	commit := func() error {
 		for _, msg := range messages {
@@ -317,7 +317,7 @@ func (h *batchConsumerHandler) consumeBatch(session sarama.ConsumerGroupSession,
 	}
 
 	// Monitoring: message batch handled successfully (function processed).
-	debugf(h.logger, "kafka processed message batch: topic=%s count=%d offsets=%d..%d", topic, len(messages), firstOffset, lastOffset)
+	h.logger.Debugf("kafka processed message batch: topic=%s count=%d offsets=%d..%d", topic, len(messages), firstOffset, lastOffset)
 
 	return nil
 }

@@ -2,14 +2,13 @@ package kafka
 
 import "github.com/IBM/sarama"
 
-// Acks is how many broker acknowledgements a producer waits for before
-// a publish succeeds: Kafka's producer "acks" setting. Use the Kafka values
-// "0", "1" and "all" (or "-1", which Kafka treats as "all"); the names "none"
-// and "local" are accepted as aliases of "0" and "1". An empty value means the
+// Acks is how many broker acknowledgements a producer waits for before a
+// publish succeeds: Kafka's producer "acks" setting. Use the Kafka values "0",
+// "1" and "all", or "-1", which Kafka treats as "all". An empty value means the
 // default, "all".
 //
-// A plain string works anywhere a Acks is expected, including YAML
-// and environment variables, where an unquoted 1 is read as "1".
+// A plain string works anywhere an Acks is expected, including YAML and
+// environment variables, where an unquoted 1 is read as "1".
 type Acks string
 
 const (
@@ -34,8 +33,6 @@ var acksSpellings = []struct {
 	{AcksLeader, sarama.WaitForLocal},
 	{AcksAll, sarama.WaitForAll},
 	{"-1", sarama.WaitForAll},
-	{"none", sarama.NoResponse},
-	{"local", sarama.WaitForLocal},
 }
 
 // acksNames returns the accepted spellings for error messages.

@@ -55,7 +55,7 @@ func (p *Producer) PublishMessageWithMetadata(message Message) (Metadata, error)
 	}
 
 	// Monitoring: message published to the broker.
-	debugf(p.logger, "kafka published message: topic=%s key=%q partition=%d offset=%d", message.Topic, message.Key, partition, offset)
+	p.logger.Debugf("kafka published message: topic=%s key=%q partition=%d offset=%d", message.Topic, message.Key, partition, offset)
 
 	return Metadata{
 		Topic:     message.Topic,
@@ -92,9 +92,7 @@ func (p *Producer) PublishMessages(messages []Message) error {
 	}
 
 	// Monitoring: message batch published to the broker.
-	if debugEnabled(p.logger) {
-		debugf(p.logger, "kafka published message batch: topics=%d count=%d", distinctTopics(messages), len(messages))
-	}
+	p.logger.Debugf("kafka published message batch: count=%d", len(messages))
 
 	return nil
 }
@@ -107,13 +105,4 @@ func (p *Producer) Close() error {
 	}
 
 	return nil
-}
-
-func distinctTopics(messages []Message) int {
-	topics := make(map[string]struct{}, 1)
-	for _, message := range messages {
-		topics[message.Topic] = struct{}{}
-	}
-
-	return len(topics)
 }

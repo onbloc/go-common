@@ -7,7 +7,7 @@ import (
 	"github.com/IBM/sarama"
 )
 
-func TestAcksAcceptsKafkaValuesAndAliases(t *testing.T) {
+func TestAcksAcceptsKafkaValues(t *testing.T) {
 	tests := []struct {
 		spelling Acks
 		want     sarama.RequiredAcks
@@ -16,9 +16,7 @@ func TestAcksAcceptsKafkaValuesAndAliases(t *testing.T) {
 		{"1", sarama.WaitForLocal},
 		{"all", sarama.WaitForAll},
 		{"-1", sarama.WaitForAll}, // Kafka treats -1 as all
-		{"none", sarama.NoResponse},
-		{"local", sarama.WaitForLocal},
-		{"", sarama.WaitForAll}, // unset means the default
+		{"", sarama.WaitForAll},   // unset means the default
 	}
 
 	for _, tt := range tests {
@@ -45,8 +43,9 @@ func TestAcksAcceptsKafkaValuesAndAliases(t *testing.T) {
 }
 
 func TestAcksRejectsOtherValues(t *testing.T) {
-	// 2 and "quorum" look plausible but are not Kafka acks values.
-	for _, spelling := range []Acks{"2", "quorum", "ALL", "-2"} {
+	// These look plausible but are not Kafka acks values; "none" and "local"
+	// were Sarama's names and are no longer accepted.
+	for _, spelling := range []Acks{"2", "quorum", "ALL", "-2", "none", "local"} {
 		conf := validConfig()
 		conf.Producer.Acks = spelling
 
@@ -62,7 +61,7 @@ func TestAcksErrorListsKafkaValuesFirst(t *testing.T) {
 	conf.Producer.Acks = "quorum"
 
 	err := conf.Validate()
-	if err == nil || !strings.Contains(err.Error(), "want one of: 0, 1, all, -1, none, local") {
+	if err == nil || !strings.Contains(err.Error(), "want one of: 0, 1, all, -1") {
 		t.Fatalf("Validate() error = %v, want the accepted values listed Kafka's first", err)
 	}
 }
