@@ -4,12 +4,13 @@
 
 ## Installation
 
-While this repository is private, configure Go and GitHub authentication before downloading the module:
+Requires Go 1.24 or later. Once the repository is public and `kafka/v0.1.0` is published, install the module with:
 
 ```bash
-go env -w GOPRIVATE=github.com/onbloc/*
 go get github.com/onbloc/go-common/kafka@v0.1.0
 ```
+
+Public downloads do not require GitHub authentication or `GOPRIVATE`.
 
 ## Usage
 
