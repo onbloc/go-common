@@ -39,17 +39,9 @@ func (p *Producer) PublishMessage(message Message) error {
 // PublishMessageWithMetadata is PublishMessage that also reports where the
 // message was written. It is safe for concurrent use.
 func (p *Producer) PublishMessageWithMetadata(message Message) (Metadata, error) {
-	if message.Topic == "" {
-		return Metadata{}, fmt.Errorf("kafka topic is required")
-	}
-
-	msg := &sarama.ProducerMessage{
-		Topic: message.Topic,
-		Value: sarama.ByteEncoder(message.Value),
-	}
-
-	if message.Key != "" {
-		msg.Key = sarama.StringEncoder(message.Key)
+	msg, err := toProducerMessage(message)
+	if err != nil {
+		return Metadata{}, err
 	}
 
 	partition, offset, err := p.producer.SendMessage(msg)
@@ -82,17 +74,9 @@ func (p *Producer) PublishMessages(messages []Message) error {
 
 	kafkaMessages := make([]*sarama.ProducerMessage, 0, len(messages))
 	for _, message := range messages {
-		if message.Topic == "" {
-			return fmt.Errorf("kafka topic is required")
-		}
-
-		msg := &sarama.ProducerMessage{
-			Topic: message.Topic,
-			Value: sarama.ByteEncoder(message.Value),
-		}
-
-		if message.Key != "" {
-			msg.Key = sarama.StringEncoder(message.Key)
+		msg, err := toProducerMessage(message)
+		if err != nil {
+			return err
 		}
 
 		kafkaMessages = append(kafkaMessages, msg)

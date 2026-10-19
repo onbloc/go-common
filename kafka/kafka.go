@@ -269,6 +269,8 @@ func (h *batchConsumerHandler) consumeBatch(session sarama.ConsumerGroupSession,
 				Key:       string(msg.Key),
 				Partition: msg.Partition,
 				Offset:    msg.Offset,
+				Headers:   fromRecordHeaders(msg.Headers),
+				Timestamp: msg.Timestamp,
 			},
 		})
 	}

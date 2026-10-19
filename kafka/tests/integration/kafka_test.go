@@ -67,6 +67,58 @@ func TestKafkaIntegration_PublishAndConsume(t *testing.T) {
 	}
 }
 
+func TestKafkaIntegration_HeadersAndTimestampRoundTrip(t *testing.T) {
+	env := newTestEnv(t, "test-topic-headers", "test-consumer-group-headers")
+
+	before := time.Now().Add(-time.Minute)
+	err := env.producer.PublishMessage(commonkafka.Message{
+		Topic: env.topic,
+		Key:   "key-1",
+		Value: []byte("payload"),
+		Headers: []commonkafka.Header{
+			{Key: "trace-id", Value: []byte("abc")},
+			{Key: "tag", Value: []byte("a")},
+			{Key: "tag", Value: []byte("b")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to publish message: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+
+	received := make(chan commonkafka.Metadata, 1)
+	go func() {
+		err := env.consumer.StartListening(ctx, func(_ []byte, meta commonkafka.Metadata, ack func() error) error {
+			received <- meta
+
+			return ack()
+		})
+		if err != nil && ctx.Err() == nil {
+			t.Logf("listener error: %v", err)
+		}
+	}()
+
+	select {
+	case meta := <-received:
+		if meta.Key != "key-1" {
+			t.Errorf("key = %q, want key-1", meta.Key)
+		}
+		if len(meta.Headers) != 3 ||
+			meta.Headers[0].Key != "trace-id" || string(meta.Headers[0].Value) != "abc" ||
+			meta.Headers[1].Key != "tag" || string(meta.Headers[1].Value) != "a" ||
+			meta.Headers[2].Key != "tag" || string(meta.Headers[2].Value) != "b" {
+			t.Errorf("headers = %+v, want trace-id=abc, tag=a, tag=b in order", meta.Headers)
+		}
+		if meta.Timestamp.Before(before) || meta.Timestamp.After(time.Now().Add(time.Minute)) {
+			t.Errorf("timestamp = %v, want a recent time", meta.Timestamp)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for the message")
+	}
+}
+
 func TestKafkaIntegration_PublishMultipleMessages(t *testing.T) {
 	env := newTestEnv(t, "test-topic-batch", "test-consumer-group-batch")
 
