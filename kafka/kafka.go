@@ -222,7 +222,7 @@ func (h *batchConsumerHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 
 	for {
 		if session.Context().Err() != nil {
-			return session.Context().Err()
+			return nil
 		}
 
 		var timerC <-chan time.Time
@@ -232,7 +232,10 @@ func (h *batchConsumerHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 
 		select {
 		case <-session.Context().Done():
-			return session.Context().Err()
+			// The session ended (rebalance or shutdown). Any unflushed batch is
+			// dropped without a commit, so it is redelivered. This is the normal
+			// way a claim stops, not an error.
+			return nil
 		case <-timerC:
 			if err := flush(); err != nil {
 				return err
