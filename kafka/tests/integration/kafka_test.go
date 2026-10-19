@@ -93,7 +93,7 @@ func TestKafkaIntegration_HeadersAndTimestampRoundTrip(t *testing.T) {
 
 	received := make(chan commonkafka.Metadata, 1)
 	go func() {
-		err := env.consumer.StartListening(ctx, func(_ []byte, meta commonkafka.Metadata, commit func() error) error {
+		err := env.consumer.StartListening(ctx, func(_ context.Context, _ []byte, meta commonkafka.Metadata, commit func() error) error {
 			received <- meta
 
 			return commit()
@@ -144,7 +144,7 @@ func TestKafkaIntegration_KeyRoundTripKeepsNullEmptyAndBinary(t *testing.T) {
 	keys := map[string][]byte{}
 	done := make(chan struct{})
 	go func() {
-		err := env.consumer.StartListening(ctx, func(message []byte, meta commonkafka.Metadata, commit func() error) error {
+		err := env.consumer.StartListening(ctx, func(_ context.Context, message []byte, meta commonkafka.Metadata, commit func() error) error {
 			mu.Lock()
 			keys[string(message)] = meta.Key
 			complete := len(keys) == 3
@@ -298,7 +298,7 @@ func TestKafkaIntegration_HandlerErrorRedeliversMessage(t *testing.T) {
 	var calls atomic.Int32
 	delivered := make(chan struct{})
 	go func() {
-		err := env.consumer.StartListening(ctx, func(message []byte, _ commonkafka.Metadata, commit func() error) error {
+		err := env.consumer.StartListening(ctx, func(_ context.Context, message []byte, _ commonkafka.Metadata, commit func() error) error {
 			if calls.Add(1) == 1 {
 				return errors.New("first attempt fails")
 			}
@@ -362,7 +362,7 @@ func TestKafkaIntegration_ErrorHandlerReceivesHandlerError(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		err := consumer.StartListening(ctx, func([]byte, commonkafka.Metadata, func() error) error { return handlerErr })
+		err := consumer.StartListening(ctx, func(context.Context, []byte, commonkafka.Metadata, func() error) error { return handlerErr })
 		if err != nil && ctx.Err() == nil {
 			t.Logf("listener error: %v", err)
 		}
@@ -424,7 +424,7 @@ func TestKafkaIntegration_StartListeningStopsOnContextCancelAndResumesWithNewCon
 	listenerErr := make(chan error, 1)
 
 	go func() {
-		listenerErr <- env.consumer.StartListening(listenerCtx, func(message []byte, _ commonkafka.Metadata, commit func() error) error {
+		listenerErr <- env.consumer.StartListening(listenerCtx, func(_ context.Context, message []byte, _ commonkafka.Metadata, commit func() error) error {
 			processedMessages <- string(message)
 			if err := commit(); err != nil {
 				return err
@@ -444,6 +444,58 @@ func TestKafkaIntegration_StartListeningStopsOnContextCancelAndResumesWithNewCon
 
 	env2 := newTestEnv(t, topic, consumerGroup)
 	require.Equal(t, "second", env2.consumeOne(t, defaultTimeout))
+}
+
+// The handler's context is the group session's, so it ends with the listener
+// and a commit after that is refused: the message was never stored and the next
+// consumer of the group gets it again.
+func TestKafkaIntegration_HandlerContextEndsWithSessionAndLateCommitIsRefused(t *testing.T) {
+	topic := "test-topic-session-ctx"
+	consumerGroup := "test-consumer-group-session-ctx"
+	env := newTestEnv(t, topic, consumerGroup)
+
+	env.publishMessage(t, "pending")
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+
+	listenerCtx, stopListener := context.WithCancel(ctx)
+	started := make(chan struct{}, 1)
+	commitErr := make(chan error, 1)
+	listenerErr := make(chan error, 1)
+
+	go func() {
+		listenerErr <- env.consumer.StartListening(listenerCtx, func(handlerCtx context.Context, _ []byte, _ commonkafka.Metadata, commit func() error) error {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+
+			<-handlerCtx.Done()
+
+			select {
+			case commitErr <- commit():
+			default:
+			}
+
+			return handlerCtx.Err()
+		})
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(defaultTimeout):
+		t.Fatal("handler was not called in time")
+	}
+
+	stopListener()
+
+	require.ErrorIs(t, receiveError(t, commitErr, defaultTimeout), context.Canceled)
+	require.ErrorIs(t, receiveError(t, listenerErr, defaultTimeout), context.Canceled)
+	require.NoError(t, env.consumer.Close())
+
+	env2 := newTestEnv(t, topic, consumerGroup)
+	require.Equal(t, "pending", env2.consumeOne(t, defaultTimeout))
 }
 
 // testEnv encapsulates producer and consumer for cleaner test setup.
@@ -585,7 +637,7 @@ func (e *testEnv) consumeOne(t *testing.T, timeout time.Duration) string {
 	done := make(chan struct{})
 
 	go func() {
-		if err := e.consumer.StartListening(ctx, func(message []byte, _ commonkafka.Metadata, commit func() error) error {
+		if err := e.consumer.StartListening(ctx, func(_ context.Context, message []byte, _ commonkafka.Metadata, commit func() error) error {
 			received = string(message)
 			close(done)
 			return commit()
@@ -614,7 +666,7 @@ func (e *testEnv) consumeN(t *testing.T, count int, timeout time.Duration) []str
 	done := make(chan struct{})
 
 	go func() {
-		if err := e.consumer.StartListening(ctx, func(message []byte, _ commonkafka.Metadata, commit func() error) error {
+		if err := e.consumer.StartListening(ctx, func(_ context.Context, message []byte, _ commonkafka.Metadata, commit func() error) error {
 			mu.Lock()
 			received = append(received, string(message))
 			n := len(received)
@@ -686,7 +738,7 @@ func TestKafkaIntegration_HandlerErrorBacksOffBeforeRejoining(t *testing.T) {
 
 	var mu sync.Mutex
 	var stamps []time.Time
-	err := env.consumer.StartListening(ctx, func([]byte, commonkafka.Metadata, func() error) error {
+	err := env.consumer.StartListening(ctx, func(context.Context, []byte, commonkafka.Metadata, func() error) error {
 		mu.Lock()
 		stamps = append(stamps, time.Now())
 		mu.Unlock()

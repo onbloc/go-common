@@ -110,16 +110,18 @@ if err != nil {
     return err
 }
 
-err = subscriber.StartListening(ctx, func(message []byte, meta kafka.Metadata, commit func() error) error {
+err = subscriber.StartListening(ctx, func(ctx context.Context, message []byte, meta kafka.Metadata, commit func() error) error {
     // handle message
     return commit()
 })
 ```
 
+The handler's `ctx` is the consumer group session's context, not the one passed to `StartListening`. It ends when a rebalance or shutdown ends the session, and also when the outer context ends. Pass it to the work the handler starts (database transactions, calls to other services): a rebalance waits for running handlers to return, so a handler that ignores `ctx` delays it for the whole group and may keep working on messages that now belong to another consumer. The outer context is no substitute, because it stays live through a rebalance.
+
 `StartBatchListening` groups messages up to `BatchConfig.MaxMessages` or until `FlushInterval` elapses, whichever comes first, and `commit` stores the offset once per batch:
 
 ```go
-err = subscriber.StartBatchListening(ctx, conf.Kafka.Consumer.BatchConfig(), func(messages []kafka.BatchMessage, commit func() error) error {
+err = subscriber.StartBatchListening(ctx, conf.Kafka.Consumer.BatchConfig(), func(ctx context.Context, messages []kafka.BatchMessage, commit func() error) error {
     // handle messages
     return commit()
 })
@@ -144,8 +146,9 @@ Delivery is at-least-once. The consumer never commits offsets on its own (auto-c
 
 - `commit()` stores the consumer group's offset for the messages of the batch (one message with `StartListening`), so they are not delivered again. It also covers every earlier offset of that partition and cannot be undone: call it last, after processing has succeeded.
 - A handler that returns without calling `commit()` leaves its messages uncommitted. They are delivered again after a restart or rebalance, unless a later `commit()` on the same partition covers them.
-- `commit()` always returns `nil`: Sarama does not report commit failures, so a failed commit shows up as a redelivery rather than an error.
+- `commit()` returns `nil` while the session is live: Sarama does not report broker commit failures, so a failed commit shows up as a redelivery rather than an error. Once the session has ended it marks and commits nothing and returns the context's error, so a handler (or a commit kept for later) cannot mistake a lost session for a stored offset; the batch is delivered again.
 - When a rebalance or shutdown ends the session, a batch that was still filling is dropped without a commit and delivered again to whichever consumer takes the partition next. This is not reported as an error.
+- A handler error that is only the session's own cancellation (`ctx.Err()` or an error wrapping it, such as a cancelled database call or a refused `commit()`) is a normal stop: it is not logged or reported, and the consumer rejoins at once.
 - A crash between processing and `commit()` delivers the batch again, so handlers must be safe to run twice on the same messages.
 - `StartListening` and `StartBatchListening` return the context's error (`context.Canceled`) when stopped through `ctx` or `Close()`; treat that as a normal stop. They return only then: errors from the consumer group are logged and retried every second, not returned (see [Observing consumer errors](#observing-consumer-errors)).
 
@@ -156,7 +159,7 @@ When a handler returns an error, the module logs it through `Logger.Errorf` and 
 There is no built-in retry, skip, or dead-letter policy; decide in the handler:
 
 ```go
-err = subscriber.StartListening(ctx, func(message []byte, meta kafka.Metadata, commit func() error) error {
+err = subscriber.StartListening(ctx, func(ctx context.Context, message []byte, meta kafka.Metadata, commit func() error) error {
     if err := process(ctx, message); err != nil {
         if isPermanent(err) {
             log.Errorf("dropping %s[%d]@%d: %v", meta.Topic, meta.Partition, meta.Offset, err)

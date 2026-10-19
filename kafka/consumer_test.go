@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -90,7 +91,7 @@ func newBatchRecorder() *batchRecorder {
 // handler records each batch and commits it, like a well-behaved application.
 // It signals only after the commit has run, so a test that waits for the call
 // can assert on the committed offsets without racing the commit.
-func (r *batchRecorder) handler(messages []BatchMessage, commit func() error) error {
+func (r *batchRecorder) handler(_ context.Context, messages []BatchMessage, commit func() error) error {
 	r.mu.Lock()
 	r.batches = append(r.batches, append([]BatchMessage(nil), messages...))
 	r.mu.Unlock()
@@ -265,7 +266,7 @@ func TestConsumeClaimReturnsHandlerErrorWithoutCommitting(t *testing.T) {
 	claim := newFakeClaim()
 	handlerErr := errors.New("boom")
 	h := newTestHandler(BatchConfig{MaxMessages: 2, FlushInterval: time.Hour},
-		func([]BatchMessage, func() error) error { return handlerErr })
+		func(context.Context, []BatchMessage, func() error) error { return handlerErr })
 
 	done := runClaim(h, session, claim)
 
@@ -282,7 +283,7 @@ func TestConsumeClaimDoesNotCommitUnlessHandlerCommits(t *testing.T) {
 	claim := newFakeClaim()
 	called := make(chan struct{}, 1)
 	h := newTestHandler(BatchConfig{MaxMessages: 1, FlushInterval: time.Hour},
-		func([]BatchMessage, func() error) error {
+		func(context.Context, []BatchMessage, func() error) error {
 			called <- struct{}{}
 
 			return nil
@@ -302,6 +303,171 @@ func TestConsumeClaimDoesNotCommitUnlessHandlerCommits(t *testing.T) {
 		t.Fatalf("ConsumeClaim() error = %v", err)
 	}
 	assertCommittedThrough(t, session, nothingCommitted, 0)
+}
+
+// cancelOnMarkSession ends its own session as soon as an offset is marked,
+// like a rebalance landing between the mark and the commit.
+type cancelOnMarkSession struct {
+	*fakeSession
+
+	cancel context.CancelFunc
+}
+
+func (s *cancelOnMarkSession) MarkMessage(msg *sarama.ConsumerMessage, metadata string) {
+	s.fakeSession.MarkMessage(msg, metadata)
+	s.cancel()
+}
+
+// A handler gets the session's context, so a rebalance can stop its work. Giving
+// up because of that (here with a wrapped error, as a database driver would
+// return it) is a normal stop, not a failure.
+func TestHandlerReceivesSessionContextAndCancellationIsNotAFailure(t *testing.T) {
+	sessionCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	session := newFakeSession(sessionCtx)
+	claim := newFakeClaim()
+	started := make(chan struct{})
+	h := newTestHandler(BatchConfig{MaxMessages: 1, FlushInterval: time.Hour},
+		func(ctx context.Context, _ []BatchMessage, _ func() error) error {
+			close(started)
+			<-ctx.Done()
+
+			return fmt.Errorf("query: %w", ctx.Err())
+		})
+
+	done := runClaim(h, session, claim)
+
+	claim.send(0)
+	<-started
+	cancel()
+
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("ConsumeClaim() error = %v, want nil: the handler only gave up because the session ended", err)
+	}
+	if h.failed.Load() {
+		t.Fatal("failed is set: a rebalance would wait before rejoining")
+	}
+	assertCommittedThrough(t, session, nothingCommitted, 0)
+}
+
+// Only the session's own cancellation is excused. Any other handler error still
+// fails the claim, even after the session has ended, and a context.Canceled
+// from somewhere else while the session is live is still a handler error.
+func TestHandlerErrorOtherThanSessionCancellationStillFails(t *testing.T) {
+	otherErr := errors.New("boom")
+
+	tests := []struct {
+		name        string
+		cancelFirst bool
+		err         error
+	}{
+		{name: "other error after session ended", cancelFirst: true, err: otherErr},
+		{name: "canceled error while session is live", err: context.Canceled},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessionCtx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
+			session := newFakeSession(sessionCtx)
+			claim := newFakeClaim()
+			started := make(chan struct{})
+			h := newTestHandler(BatchConfig{MaxMessages: 1, FlushInterval: time.Hour},
+				func(ctx context.Context, _ []BatchMessage, _ func() error) error {
+					close(started)
+
+					if tt.cancelFirst {
+						<-ctx.Done()
+					}
+
+					return tt.err
+				})
+
+			done := runClaim(h, session, claim)
+
+			claim.send(0)
+			<-started
+
+			if tt.cancelFirst {
+				cancel()
+			}
+
+			if err := waitDone(t, done); !errors.Is(err, tt.err) {
+				t.Fatalf("ConsumeClaim() error = %v, want %v", err, tt.err)
+			}
+			if !h.failed.Load() {
+				t.Fatal("failed is not set: a failing handler must back off before rejoining")
+			}
+		})
+	}
+}
+
+// A commit on a session that has ended must not mark or commit anything, and
+// must say so, rather than return nil as if the offset were stored.
+func TestCommitAfterSessionEndedReturnsErrorAndStoresNothing(t *testing.T) {
+	sessionCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	session := newFakeSession(sessionCtx)
+	claim := newFakeClaim()
+	started := make(chan struct{})
+	commitErr := make(chan error, 1)
+	h := newTestHandler(BatchConfig{MaxMessages: 1, FlushInterval: time.Hour},
+		func(ctx context.Context, _ []BatchMessage, commit func() error) error {
+			close(started)
+			<-ctx.Done()
+			commitErr <- commit()
+
+			return nil
+		})
+
+	done := runClaim(h, session, claim)
+
+	claim.send(0)
+	<-started
+	cancel()
+
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("ConsumeClaim() error = %v, want nil", err)
+	}
+	if err := <-commitErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("commit() error = %v, want context.Canceled", err)
+	}
+	assertCommittedThrough(t, session, nothingCommitted, 0)
+}
+
+// The session can also end between marking and committing. That commit must not
+// be reported as stored either.
+func TestCommitReportsSessionEndingAfterMark(t *testing.T) {
+	sessionCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	session := &cancelOnMarkSession{fakeSession: newFakeSession(sessionCtx), cancel: cancel}
+	claim := newFakeClaim()
+	commitErr := make(chan error, 1)
+	h := newTestHandler(BatchConfig{MaxMessages: 1, FlushInterval: time.Hour},
+		func(_ context.Context, _ []BatchMessage, commit func() error) error {
+			commitErr <- commit()
+
+			return nil
+		})
+
+	done := runClaim(h, session, claim)
+
+	claim.send(0)
+
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("ConsumeClaim() error = %v, want nil", err)
+	}
+	if err := <-commitErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("commit() error = %v, want context.Canceled", err)
+	}
+
+	if _, commits := session.snapshot(); commits != 0 {
+		t.Fatalf("Commit() calls = %d, want 0 after the session ended", commits)
+	}
 }
 
 func TestConsumeClaimPassesMessageMetadataToHandler(t *testing.T) {
@@ -411,7 +577,7 @@ func TestConsumerBacksOffAfterAHandlerError(t *testing.T) {
 	c := newTestConsumer(group, nil)
 	c.retryBackoff = backoff
 
-	calls := listen(t, c, group, func([]BatchMessage, func() error) error { return errors.New("poison") }, 3)
+	calls := listen(t, c, group, func(context.Context, []BatchMessage, func() error) error { return errors.New("poison") }, 3)
 
 	// The premise: a handler error comes back from ConsumeClaim, ending the
 	// session. The last Consume call may have started after the listener was
@@ -438,7 +604,7 @@ func TestConsumerRejoinsAtOnceAfterANormalSession(t *testing.T) {
 	c.retryBackoff = time.Second
 
 	start := time.Now()
-	listen(t, c, group, func(_ []BatchMessage, commit func() error) error { return commit() }, 5)
+	listen(t, c, group, func(_ context.Context, _ []BatchMessage, commit func() error) error { return commit() }, 5)
 
 	for i, err := range group.claimErrors() {
 		if err != nil {
@@ -461,7 +627,7 @@ func TestCommitCalledLaterCommitsItsOwnBatch(t *testing.T) {
 	kept := make(chan func() error, 1)
 	calls := make(chan struct{}, 2)
 	n := 0
-	h := newTestHandler(BatchConfig{MaxMessages: 1, FlushInterval: time.Hour}, func(_ []BatchMessage, commit func() error) error {
+	h := newTestHandler(BatchConfig{MaxMessages: 1, FlushInterval: time.Hour}, func(_ context.Context, _ []BatchMessage, commit func() error) error {
 		n++
 		if n == 1 {
 			kept <- commit // keep it; neither batch is committed by its handler
@@ -538,7 +704,7 @@ func TestCloseIsNotReportedAsAConsumeError(t *testing.T) {
 
 		done := make(chan error, 1)
 		go func() {
-			done <- c.StartBatchListening(t.Context(), BatchConfig{MaxMessages: 1}, func([]BatchMessage, func() error) error { return nil })
+			done <- c.StartBatchListening(t.Context(), BatchConfig{MaxMessages: 1}, func(context.Context, []BatchMessage, func() error) error { return nil })
 		}()
 
 		if err := c.Close(); err != nil {

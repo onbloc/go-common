@@ -59,9 +59,9 @@ func NewConsumer(config *ConsumerConfig, opts ...Options[*Consumer]) (*Consumer,
 }
 
 func (c *Consumer) StartListening(ctx context.Context, handler MessageHandler) error {
-	return c.StartBatchListening(ctx, BatchConfig{MaxMessages: 1}, func(messages []BatchMessage, commit func() error) error {
+	return c.StartBatchListening(ctx, BatchConfig{MaxMessages: 1}, func(sessionCtx context.Context, messages []BatchMessage, commit func() error) error {
 		for _, message := range messages {
-			if err := handler(message.Value, message.Metadata, commit); err != nil {
+			if err := handler(sessionCtx, message.Value, message.Metadata, commit); err != nil {
 				return err
 			}
 		}
@@ -176,9 +176,9 @@ func NewConcurrentConsumer(config *ConsumerConfig, opts ...Options[*Consumer]) (
 }
 
 func (c *ConcurrentConsumer) StartListening(ctx context.Context, handler MessageHandler) error {
-	return c.StartBatchListening(ctx, BatchConfig{MaxMessages: 1}, func(messages []BatchMessage, commit func() error) error {
+	return c.StartBatchListening(ctx, BatchConfig{MaxMessages: 1}, func(sessionCtx context.Context, messages []BatchMessage, commit func() error) error {
 		for _, message := range messages {
-			if err := handler(message.Value, message.Metadata, commit); err != nil {
+			if err := handler(sessionCtx, message.Value, message.Metadata, commit); err != nil {
 				return err
 			}
 		}
@@ -338,13 +338,37 @@ func (h *batchConsumerHandler) consumeBatch(session sarama.ConsumerGroupSession,
 	// commit that outlives this call must not read it.
 	last := messages[len(messages)-1]
 	commit := func() error {
+		// A session that is over cannot be committed to. Refuse before marking, so
+		// nothing is marked, and again before committing, so a cancellation that
+		// lands in between is not reported as a stored offset. Sarama does not
+		// report broker failures, so this is the one error commit can give.
+		if err := session.Context().Err(); err != nil {
+			return err
+		}
+
 		session.MarkMessage(last, "")
+
+		if err := session.Context().Err(); err != nil {
+			return err
+		}
+
 		session.Commit()
 
 		return nil
 	}
 
-	if err := h.metadataHandler(batchMessages, commit); err != nil {
+	if err := h.metadataHandler(session.Context(), batchMessages, commit); err != nil {
+		// The session ended while the handler ran and the handler gave up only
+		// because of that (its work was cancelled, or commit refused). That is how
+		// a rebalance or shutdown looks from inside a handler: not a failure to
+		// log, to report, or to back off for, and the uncommitted batch is
+		// delivered again by whoever owns the partition next.
+		if sessionErr := session.Context().Err(); sessionErr != nil && errors.Is(err, sessionErr) {
+			h.logger.Debugf("kafka abandoned message batch, session ended: topic=%s count=%d offsets=%d..%d", topic, len(messages), firstOffset, lastOffset)
+
+			return nil
+		}
+
 		h.logger.Errorf("Failed to process message batch: topic=%s count=%d offsets=%d..%d error=%v", topic, len(messages), firstOffset, lastOffset, err)
 		h.failed.Store(true)
 

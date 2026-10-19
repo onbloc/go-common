@@ -68,28 +68,45 @@ type Subscriber interface {
 	Close() error
 }
 
-// The handler types receive a commit function. Calling commit stores the
-// consumer group's offset for every message of the batch (one message for
-// StartListening), marking them as processed. The consumer never commits on
-// its own, so a message whose batch is not committed is delivered again after a
-// restart or rebalance.
+// The handler types receive the consumer group session's context and a commit
+// function.
+//
+// ctx is the session's context. It ends when a rebalance or a shutdown ends the
+// session, and also when the context given to StartListening or
+// StartBatchListening ends. Pass it to the work the handler starts (database
+// transactions, calls to other services) so that work stops when this consumer
+// loses its partitions: a rebalance waits for running handlers to return, and a
+// handler that ignores ctx delays it, and may keep working on messages that now
+// belong to another consumer. The context given to Start* is not a substitute,
+// because it stays live through a rebalance.
+//
+// Calling commit stores the consumer group's offset for every message of the
+// batch (one message for StartListening), marking them as processed. The
+// consumer never commits on its own, so a message whose batch is not committed
+// is delivered again after a restart or rebalance.
 //
 // Call commit last, once processing has succeeded: it cannot be undone, so
 // returning an error after commit does not bring the messages back. Committing
-// a batch also commits every earlier offset of that partition. commit
-// currently always returns nil, because Sarama does not report commit failures.
+// a batch also commits every earlier offset of that partition.
+//
+// Once the session has ended, commit marks and commits nothing and returns the
+// context's error, so a handler cannot mistake a lost session for a stored
+// offset; the batch is delivered again. Otherwise it returns nil, because
+// Sarama does not report broker commit failures.
 //
 // Prefer calling commit from the handler, before it returns. A commit may be
 // kept and called later, for example when processing finishes on another
-// goroutine, and it still commits its own batch. But it only reaches the
-// consumer group's current session: once a rebalance or shutdown has ended
-// that session, a late commit cannot be relied on and the batch is delivered
-// again.
+// goroutine, and it still commits its own batch, as long as the session is
+// still live.
+//
+// A handler error that is only the session's own cancellation (ctx.Err(), or an
+// error wrapping it) is a normal stop, not a failure: it is not logged or
+// reported, and the consumer rejoins at once.
 type (
 	// MessageHandler handles one message.
-	MessageHandler func(message []byte, metadata Metadata, commit func() error) error
+	MessageHandler func(ctx context.Context, message []byte, metadata Metadata, commit func() error) error
 	// BatchMessageHandler handles a batch of messages from one topic partition.
-	BatchMessageHandler func(messages []BatchMessage, commit func() error) error
+	BatchMessageHandler func(ctx context.Context, messages []BatchMessage, commit func() error) error
 )
 
 func (c BatchConfig) normalized() BatchConfig {

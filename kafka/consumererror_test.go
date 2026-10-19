@@ -119,7 +119,7 @@ func TestStartBatchListeningReportsConsumeErrorsAndKeepsRetrying(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- c.StartBatchListening(ctx, BatchConfig{MaxMessages: 1}, func([]BatchMessage, func() error) error { return nil })
+		done <- c.StartBatchListening(ctx, BatchConfig{MaxMessages: 1}, func(context.Context, []BatchMessage, func() error) error { return nil })
 	}()
 
 	// Two reports prove the consumer retried after the first failure.
