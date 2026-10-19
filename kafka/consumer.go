@@ -97,8 +97,8 @@ func (c *Consumer) StartBatchListening(ctx context.Context, config BatchConfig, 
 			handlerFailed := consumerHandler.failed.Swap(false)
 
 			if err != nil {
-				if listenerCtx.Err() != nil {
-					return listenerCtx.Err()
+				if stopErr := c.stopErr(listenerCtx); stopErr != nil {
+					return stopErr
 				}
 
 				c.logger.Errorf("Error consuming batch messages: %v", err)
@@ -118,6 +118,18 @@ func (c *Consumer) StartBatchListening(ctx context.Context, config BatchConfig, 
 			}
 		}
 	}
+}
+
+// stopErr reports why listening must end, or nil. Close cancels c.ctx before it
+// closes the consumer group, but listenerCtx only follows c.ctx through a
+// separate goroutine, so it may not be cancelled yet when Consume reports the
+// closed group. Either one is a stop, not a consume failure.
+func (c *Consumer) stopErr(listenerCtx context.Context) error {
+	if err := listenerCtx.Err(); err != nil {
+		return err
+	}
+
+	return c.ctx.Err()
 }
 
 func (c *Consumer) Close() error {
@@ -319,10 +331,14 @@ func (h *batchConsumerHandler) consumeBatch(session sarama.ConsumerGroupSession,
 	// Monitoring: message batch received from the broker (before handling).
 	h.logger.Debugf("kafka received message batch: topic=%s count=%d offsets=%d..%d", topic, len(messages), firstOffset, lastOffset)
 
+	// A batch holds consecutive messages of one topic partition, and marking a
+	// message commits every offset before it too, so marking the last one
+	// commits the batch. Capture that message now: messages is the claim's
+	// buffer, which is reused for the next batch once the handler returns, so a
+	// commit that outlives this call must not read it.
+	last := messages[len(messages)-1]
 	commit := func() error {
-		for _, msg := range messages {
-			session.MarkMessage(msg, "")
-		}
+		session.MarkMessage(last, "")
 		session.Commit()
 
 		return nil

@@ -78,6 +78,13 @@ type Subscriber interface {
 // returning an error after commit does not bring the messages back. Committing
 // a batch also commits every earlier offset of that partition. commit
 // currently always returns nil, because Sarama does not report commit failures.
+//
+// Prefer calling commit from the handler, before it returns. A commit may be
+// kept and called later, for example when processing finishes on another
+// goroutine, and it still commits its own batch. But it only reaches the
+// consumer group's current session: once a rebalance or shutdown has ended
+// that session, a late commit cannot be relied on and the batch is delivered
+// again.
 type (
 	// MessageHandler handles one message.
 	MessageHandler func(message []byte, metadata Metadata, commit func() error) error

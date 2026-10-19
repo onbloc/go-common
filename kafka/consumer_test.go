@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -146,17 +147,25 @@ func newTestHandler(config BatchConfig, fn BatchMessageHandler) *batchConsumerHa
 	return &batchConsumerHandler{logger: defaultLogger(), batchConfig: config, metadataHandler: fn}
 }
 
-func assertMarked(t *testing.T, session *fakeSession, wantOffsets []int64, wantCommits int) {
+// nothingCommitted is the position assertCommittedThrough expects when no
+// offset was marked.
+const nothingCommitted int64 = -1
+
+// assertCommittedThrough checks the committed position: the highest offset
+// marked, since marking an offset commits every one before it too. How many
+// marks it took to get there is not part of the behavior.
+func assertCommittedThrough(t *testing.T, session *fakeSession, wantOffset int64, wantCommits int) {
 	t.Helper()
 
 	marked, commits := session.snapshot()
-	if len(marked) != len(wantOffsets) {
-		t.Fatalf("marked offsets = %v, want %v", marked, wantOffsets)
+
+	through := nothingCommitted
+	for _, offset := range marked {
+		through = max(through, offset)
 	}
-	for i := range wantOffsets {
-		if marked[i] != wantOffsets[i] {
-			t.Fatalf("marked offsets = %v, want %v", marked, wantOffsets)
-		}
+
+	if through != wantOffset {
+		t.Fatalf("committed through offset %d (marked %v), want %d", through, marked, wantOffset)
 	}
 	if commits != wantCommits {
 		t.Fatalf("commits = %d, want %d", commits, wantCommits)
@@ -178,7 +187,7 @@ func TestConsumeClaimFlushesWhenBatchIsFull(t *testing.T) {
 	if got := rec.sizes(); len(got) != 1 || got[0] != 3 {
 		t.Fatalf("batch sizes = %v, want [3]", got)
 	}
-	assertMarked(t, session, []int64{0, 1, 2}, 1)
+	assertCommittedThrough(t, session, 2, 1)
 
 	close(claim.messages)
 	if err := waitDone(t, done); err != nil {
@@ -200,7 +209,7 @@ func TestConsumeClaimFlushesPartialBatchWhenIntervalElapses(t *testing.T) {
 	if got := rec.sizes(); len(got) != 1 || got[0] != 2 {
 		t.Fatalf("batch sizes = %v, want [2]", got)
 	}
-	assertMarked(t, session, []int64{0, 1}, 1)
+	assertCommittedThrough(t, session, 1, 1)
 
 	close(claim.messages)
 	if err := waitDone(t, done); err != nil {
@@ -225,7 +234,7 @@ func TestConsumeClaimFlushesRemainingBatchWhenClaimCloses(t *testing.T) {
 	if got := rec.sizes(); len(got) != 1 || got[0] != 2 {
 		t.Fatalf("batch sizes = %v, want [2]", got)
 	}
-	assertMarked(t, session, []int64{0, 1}, 1)
+	assertCommittedThrough(t, session, 1, 1)
 }
 
 func TestConsumeClaimReturnsNilWhenSessionEndsAndDropsPendingBatch(t *testing.T) {
@@ -248,7 +257,7 @@ func TestConsumeClaimReturnsNilWhenSessionEndsAndDropsPendingBatch(t *testing.T)
 	if got := rec.sizes(); len(got) != 0 {
 		t.Fatalf("batch sizes = %v, want none: the pending batch must be left for redelivery", got)
 	}
-	assertMarked(t, session, nil, 0)
+	assertCommittedThrough(t, session, nothingCommitted, 0)
 }
 
 func TestConsumeClaimReturnsHandlerErrorWithoutCommitting(t *testing.T) {
@@ -265,7 +274,7 @@ func TestConsumeClaimReturnsHandlerErrorWithoutCommitting(t *testing.T) {
 	if err := waitDone(t, done); !errors.Is(err, handlerErr) {
 		t.Fatalf("ConsumeClaim() error = %v, want %v", err, handlerErr)
 	}
-	assertMarked(t, session, nil, 0)
+	assertCommittedThrough(t, session, nothingCommitted, 0)
 }
 
 func TestConsumeClaimDoesNotCommitUnlessHandlerCommits(t *testing.T) {
@@ -292,7 +301,7 @@ func TestConsumeClaimDoesNotCommitUnlessHandlerCommits(t *testing.T) {
 	if err := waitDone(t, done); err != nil {
 		t.Fatalf("ConsumeClaim() error = %v", err)
 	}
-	assertMarked(t, session, nil, 0)
+	assertCommittedThrough(t, session, nothingCommitted, 0)
 }
 
 func TestConsumeClaimPassesMessageMetadataToHandler(t *testing.T) {
@@ -439,5 +448,114 @@ func TestConsumerRejoinsAtOnceAfterANormalSession(t *testing.T) {
 
 	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
 		t.Fatalf("5 normal sessions took %v, want an immediate rejoin with no backoff", elapsed)
+	}
+}
+
+// commit may be kept and called after the handler returned. The claim reuses its
+// batch buffer for the next batch, so a late commit must still commit its own
+// batch, not whatever the buffer holds by then.
+func TestCommitCalledLaterCommitsItsOwnBatch(t *testing.T) {
+	session := newFakeSession(t.Context())
+	claim := newFakeClaim()
+
+	kept := make(chan func() error, 1)
+	calls := make(chan struct{}, 2)
+	n := 0
+	h := newTestHandler(BatchConfig{MaxMessages: 1, FlushInterval: time.Hour}, func(_ []BatchMessage, commit func() error) error {
+		n++
+		if n == 1 {
+			kept <- commit // keep it; neither batch is committed by its handler
+		}
+		calls <- struct{}{}
+
+		return nil
+	})
+	done := runClaim(h, session, claim)
+
+	claim.send(0)
+	<-calls
+	claim.send(1) // reuses the buffer the first batch was delivered in
+	<-calls
+
+	late := <-kept
+	if err := late(); err != nil {
+		t.Fatalf("late commit() error = %v", err)
+	}
+
+	// Offset 1 was never committed by its handler: committing it here would
+	// acknowledge a message that nobody finished.
+	assertCommittedThrough(t, session, 0, 1)
+
+	close(claim.messages)
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("ConsumeClaim() error = %v", err)
+	}
+}
+
+// closingGroup mimics Sarama's group around Close: once closed, the Consume
+// that was running returns, and the next Consume call fails with
+// ErrClosedConsumerGroup.
+type closingGroup struct {
+	sarama.ConsumerGroup
+
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newClosingGroup() *closingGroup { return &closingGroup{closed: make(chan struct{})} }
+
+func (g *closingGroup) Consume(ctx context.Context, _ []string, _ sarama.ConsumerGroupHandler) error {
+	select {
+	case <-g.closed:
+		return sarama.ErrClosedConsumerGroup
+	default:
+	}
+
+	select {
+	case <-g.closed:
+	case <-ctx.Done():
+	}
+
+	return nil
+}
+
+func (g *closingGroup) Close() error {
+	g.once.Do(func() { close(g.closed) })
+
+	return nil
+}
+
+// Closing a consumer is a stop. Listening ends with the context error and the
+// error handler hears nothing, even when the closed group is noticed before the
+// listener's own context has followed the cancellation.
+func TestCloseIsNotReportedAsAConsumeError(t *testing.T) {
+	const rounds = 500
+
+	var reported atomic.Int32
+
+	for range rounds {
+		c := newTestConsumer(newClosingGroup(), func(*ConsumerError) { reported.Add(1) })
+
+		done := make(chan error, 1)
+		go func() {
+			done <- c.StartBatchListening(t.Context(), BatchConfig{MaxMessages: 1}, func([]BatchMessage, func() error) error { return nil })
+		}()
+
+		if err := c.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("StartBatchListening() error = %v, want context.Canceled", err)
+			}
+		case <-time.After(testWait):
+			t.Fatal("StartBatchListening did not return after Close")
+		}
+	}
+
+	if got := reported.Load(); got != 0 {
+		t.Fatalf("error handler called %d times over %d closes, want none: closing is not a failure", got, rounds)
 	}
 }

@@ -181,6 +181,28 @@ func TestKafkaIntegration_KeyRoundTripKeepsNullEmptyAndBinary(t *testing.T) {
 	}
 }
 
+// Sarama panics on a send to a closed producer and crashes the process on a
+// second Close. The Producer must turn both into plain behavior.
+func TestKafkaIntegration_CloseIsSafeToRepeatAndPublishAfterCloseFails(t *testing.T) {
+	env := newTestEnv(t, "test-topic-close", "test-consumer-group-close")
+	env.publishMessage(t, "before close")
+
+	if err := env.producer.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if err := env.producer.Close(); err != nil {
+		t.Fatalf("second Close() error = %v, want nil", err)
+	}
+
+	err := env.producer.PublishMessage(commonkafka.Message{Topic: env.topic, Value: []byte("after close")})
+	if !errors.Is(err, commonkafka.ErrProducerClosed) {
+		t.Fatalf("PublishMessage() after Close error = %v, want ErrProducerClosed", err)
+	}
+
+	// The test cleanup closes the producer a third time; that must not crash
+	// the test process either.
+}
+
 func TestKafkaIntegration_PublishMultipleMessages(t *testing.T) {
 	env := newTestEnv(t, "test-topic-batch", "test-consumer-group-batch")
 

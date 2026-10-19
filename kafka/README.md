@@ -100,7 +100,7 @@ err = publisher.PublishMessage(kafka.Message{Topic: "orders", Key: []byte("order
 
 `PublishMessage` and `PublishMessages` are safe to call concurrently. `PublishMessages` accepts messages for any mix of topics and validates all of them before sending any; if some fail to send, the returned error (a `sarama.ProducerErrors`) lists the failed messages while others may already be written, so retrying the whole call can duplicate them.
 
-Call `publisher.Close()` on shutdown to close the underlying producer.
+Call `publisher.Close()` on shutdown to close the underlying producer. `Close` waits for the publishes in flight, is safe to call more than once and from several goroutines, and any publish after it returns `kafka.ErrProducerClosed` instead of panicking. Sarama itself panics, and a second close crashes the process, so a producer must be closed only through this method.
 
 ### Consuming
 
