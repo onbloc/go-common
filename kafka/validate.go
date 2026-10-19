@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/IBM/sarama"
 )
 
 // Validate reports every problem with the values in c, joined into one error:
@@ -98,8 +100,21 @@ func (p *ProducerSettings) validate() []error {
 	if p.MaxRetries != nil {
 		errs = appendIfNegative(errs, "producer.max_retries", *p.MaxRetries)
 	}
-	if idempotenceEnabled(p.EnableIdempotence) && effectiveMaxRetries(p.MaxRetries) <= 0 {
-		errs = append(errs, errors.New("producer.max_retries must be greater than 0 while producer.enable_idempotence is true"))
+	if idempotenceEnabled(p.EnableIdempotence) {
+		if effectiveMaxRetries(p.MaxRetries) <= 0 {
+			errs = append(errs, errors.New("producer.max_retries must be greater than 0 while producer.enable_idempotence is true"))
+		}
+
+		// Sarama cannot run an idempotent producer with weaker acks or more than
+		// one in-flight request. Reject the combination instead of overriding
+		// what the config asked for; the loader's default tags make an implicit
+		// idempotence indistinguishable from an explicit one.
+		if parseKafkaAcks(p.Acks) != sarama.WaitForAll {
+			errs = append(errs, fmt.Errorf("producer.acks %q needs producer.enable_idempotence set to false: an idempotent producer requires acks all", p.Acks))
+		}
+		if maxOpen := defaultIfZero(p.MaxOpenRequests, defaultProducerMaxOpenRequests); maxOpen > 1 {
+			errs = append(errs, fmt.Errorf("producer.max_open_requests %d needs producer.enable_idempotence set to false: this client allows one in-flight request for an idempotent producer", maxOpen))
+		}
 	}
 
 	return errs

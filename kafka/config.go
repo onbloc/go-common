@@ -243,18 +243,10 @@ func applyProducerSettings(sc *sarama.Config, p *ProducerSettings) {
 	sc.Producer.Idempotent = idempotenceEnabled(p.EnableIdempotence)
 	sc.Producer.MaxMessageBytes = defaultIfZero(p.MaxMessageBytes, defaultProducerMaxMessageBytes)
 
-	maxOpenRequests := defaultIfZero(p.MaxOpenRequests, defaultProducerMaxOpenRequests)
-	if sc.Producer.Idempotent {
-		// Sarama requires idempotent producers to use WaitForAll acks and at
-		// most one in-flight request per broker connection. Keep this clamp
-		// explicit so Kafka producer ordering/duplicate guarantees are not
-		// accidentally disabled by a wider max_open_requests setting.
-		sc.Producer.RequiredAcks = sarama.WaitForAll
-		if maxOpenRequests > 1 {
-			maxOpenRequests = 1
-		}
-	}
-	sc.Net.MaxOpenRequests = maxOpenRequests
+	// An idempotent producer needs acks=all and one in-flight request per
+	// connection; ValidateProducer rejects configs that ask for anything else
+	// instead of quietly overriding them.
+	sc.Net.MaxOpenRequests = defaultIfZero(p.MaxOpenRequests, defaultProducerMaxOpenRequests)
 }
 
 // defaultIfZero substitutes def for v when v is unset (zero or negative), the
