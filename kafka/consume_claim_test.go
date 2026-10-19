@@ -87,13 +87,17 @@ func newBatchRecorder() *batchRecorder {
 }
 
 // handler records each batch and commits it, like a well-behaved application.
+// It signals only after the commit has run, so a test that waits for the call
+// can assert on the committed offsets without racing the commit.
 func (r *batchRecorder) handler(messages []BatchMessage, commit func() error) error {
 	r.mu.Lock()
 	r.batches = append(r.batches, append([]BatchMessage(nil), messages...))
 	r.mu.Unlock()
+
+	err := commit()
 	r.calls <- struct{}{}
 
-	return commit()
+	return err
 }
 
 func (r *batchRecorder) waitForCall(t *testing.T) {
