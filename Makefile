@@ -12,7 +12,7 @@ help: ## Show available targets
 	@echo "  tidy             Tidy dependencies in every module"
 	@echo "  tidy-check       Verify committed go.mod and go.sum files"
 	@echo "  test             Run tests with the race detector"
-	@echo "  test-integration Run integration tests in every tests/integration module (requires Docker)"
+	@echo "  test-integration Run integration tests in every integration module (requires Docker)"
 	@echo "  vet              Run go vet in every module"
 	@echo "  lint             Run golangci-lint in every module"
 	@echo "  check            Run all required validation"
@@ -35,7 +35,7 @@ tidy-check: ## Verify committed go.mod and go.sum files
 test: ## Run tests with the race detector
 	@./scripts/test.sh
 
-test-integration: ## Run integration tests in every tests/integration module (requires Docker)
+test-integration: ## Run integration tests in every integration module (requires Docker)
 	@./scripts/test-integration.sh
 
 vet: ## Run go vet in every module
