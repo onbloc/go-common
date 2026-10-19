@@ -22,7 +22,10 @@
 // policy is left to the handler. Sarama runs one goroutine per assigned
 // partition, so handlers may be called concurrently.
 // NewConcurrentConsumer runs several consumer instances in the same group;
-// parallelism is limited by the number of partitions.
+// parallelism is limited by the number of partitions. Start* return only when
+// the context ends or the consumer is closed: errors from the consumer group
+// are logged and retried every second, not returned. Use
+// WithConsumerErrorHandler to observe them.
 //
 // Kafka orders messages only within a partition: messages with the same
 // Message.Key are consumed in publish order, messages without a key are not

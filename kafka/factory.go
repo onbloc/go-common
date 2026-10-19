@@ -12,18 +12,22 @@ func NewPublisher(conf *Config, log Logger) (Publisher, error) {
 }
 
 // NewSubscriber builds a Subscriber from Config, using log for consume
-// activity. A nil log discards output. When Config.Consumer.Concurrency is
-// greater than 1, it returns a ConcurrentConsumer running that many consumer
-// instances in the same group.
-func NewSubscriber(conf *Config, log Logger) (Subscriber, error) {
+// activity. A nil log discards output. Further options, such as
+// WithConsumerErrorHandler, are applied after the logger. When
+// Config.Consumer.Concurrency is greater than 1, it returns a
+// ConcurrentConsumer running that many consumer instances in the same group,
+// each with the same options.
+func NewSubscriber(conf *Config, log Logger, opts ...Options[*Consumer]) (Subscriber, error) {
 	consumerConfig, err := NewConsumerConfigBy(conf)
 	if err != nil {
 		return nil, err
 	}
 
+	opts = append([]Options[*Consumer]{WithConsumerLogger(log)}, opts...)
+
 	if consumerConfig.Concurrency <= 1 {
-		return NewConsumer(consumerConfig, WithConsumerLogger(log))
+		return NewConsumer(consumerConfig, opts...)
 	}
 
-	return NewConcurrentConsumer(consumerConfig, WithConsumerLogger(log))
+	return NewConcurrentConsumer(consumerConfig, opts...)
 }

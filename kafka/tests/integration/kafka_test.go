@@ -240,6 +240,65 @@ func TestKafkaIntegration_HandlerErrorRedeliversMessage(t *testing.T) {
 	}
 }
 
+// An error returned by the message handler reaches the error handler, naming
+// the partition it came from. This exercises Sarama's own error stream, which
+// is only enabled when an error handler is registered.
+func TestKafkaIntegration_ErrorHandlerReceivesHandlerError(t *testing.T) {
+	topic, group := "test-topic-errhandler", "test-consumer-group-errhandler"
+	env := newTestEnv(t, topic, group)
+	env.publishMessage(t, "fails")
+
+	consumerConfig, err := commonkafka.NewConsumerConfigBy(&commonkafka.Config{
+		Brokers:  []string{sharedKafkaBroker},
+		ClientID: "test-client-" + topic,
+		Consumer: &commonkafka.ConsumerSettings{
+			Topics:           []string{topic},
+			Group:            group,
+			SessionTimeoutMs: 10000,
+			HeartbeatMs:      3000,
+			AutoOffsetReset:  "earliest",
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to create consumer config: %v", err)
+	}
+
+	handlerErr := errors.New("cannot process")
+	reported := make(chan *commonkafka.ConsumerError, 8)
+	consumer, err := commonkafka.NewConsumer(consumerConfig, commonkafka.WithConsumerErrorHandler(func(e *commonkafka.ConsumerError) {
+		select {
+		case reported <- e:
+		default:
+		}
+	}))
+	if err != nil {
+		t.Fatalf("failed to create consumer: %v", err)
+	}
+	t.Cleanup(func() { _ = consumer.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+
+	go func() {
+		err := consumer.StartListening(ctx, func([]byte, commonkafka.Metadata, func() error) error { return handlerErr })
+		if err != nil && ctx.Err() == nil {
+			t.Logf("listener error: %v", err)
+		}
+	}()
+
+	select {
+	case e := <-reported:
+		if !errors.Is(e, handlerErr) {
+			t.Errorf("reported error = %v, want it to wrap %v", e, handlerErr)
+		}
+		if e.Topic != topic || e.Partition < 0 {
+			t.Errorf("reported partition = %s[%d], want %s[>=0]", e.Topic, e.Partition, topic)
+		}
+	case <-ctx.Done():
+		t.Fatal("the handler error was never reported to the error handler")
+	}
+}
+
 func TestKafkaIntegration_CommitStoresOffset(t *testing.T) {
 	topic := "test-topic-commit"
 	consumerGroup := "test-consumer-group-commit"

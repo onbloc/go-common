@@ -14,25 +14,34 @@ type Consumer struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	topics        []string
+	errorHandler  func(*ConsumerError)
 }
 
 func NewConsumer(config *ConsumerConfig, opts ...Options[*Consumer]) (*Consumer, error) {
-	consumerGroup, err := sarama.NewConsumerGroup(config.Brokers, config.ConsumerGroup, config.ConsumerConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Kafka consumer group: %w", err)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 
 	c := &Consumer{
-		consumerGroup: consumerGroup,
-		topics:        config.Topics,
-		logger:        defaultLogger(),
-		ctx:           ctx,
-		cancel:        cancel,
+		topics: config.Topics,
+		logger: defaultLogger(),
+		ctx:    ctx,
+		cancel: cancel,
 	}
 
+	// Options come first: the error handler decides how the group is configured.
 	applyOptions(c, opts)
+
+	consumerGroup, err := sarama.NewConsumerGroup(config.Brokers, config.ConsumerGroup, c.groupConfig(config.ConsumerConfig))
+	if err != nil {
+		cancel()
+
+		return nil, fmt.Errorf("failed to create Kafka consumer group: %w", err)
+	}
+
+	c.consumerGroup = consumerGroup
+
+	if c.errorHandler != nil {
+		go c.forwardGroupErrors()
+	}
 
 	return c, nil
 }
@@ -79,6 +88,7 @@ func (c *Consumer) StartBatchListening(ctx context.Context, config BatchConfig, 
 				}
 
 				c.logger.Errorf("Error consuming batch messages: %v", err)
+				c.reportError(newGroupError(err))
 
 				select {
 				case <-listenerCtx.Done():

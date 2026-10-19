@@ -121,7 +121,7 @@ Delivery is at-least-once. The consumer never commits offsets on its own (auto-c
 - `commit()` always returns `nil`: Sarama does not report commit failures, so a failed commit shows up as a redelivery rather than an error.
 - When a rebalance or shutdown ends the session, a batch that was still filling is dropped without a commit and delivered again to whichever consumer takes the partition next. This is not reported as an error.
 - A crash between processing and `commit()` delivers the batch again, so handlers must be safe to run twice on the same messages.
-- `StartListening` and `StartBatchListening` return the context's error (`context.Canceled`) when stopped through `ctx` or `Close()`; treat that as a normal stop.
+- `StartListening` and `StartBatchListening` return the context's error (`context.Canceled`) when stopped through `ctx` or `Close()`; treat that as a normal stop. They return only then: errors from the consumer group are logged and retried every second, not returned (see [Observing consumer errors](#observing-consumer-errors)).
 
 ### Handler errors
 
@@ -146,6 +146,22 @@ err = subscriber.StartListening(ctx, func(message []byte, meta kafka.Metadata, c
 ```
 
 With `StartBatchListening`, `commit` commits the whole batch, so skipping drops every message in it; retry or split such a batch yourself.
+
+### Observing consumer errors
+
+`StartListening` and `StartBatchListening` do not return consumer errors: an error from the consumer group is logged through `Logger.Errorf` and consuming is retried every second, and Sarama's own consume errors (for example a failed fetch) only reach Sarama's package logger, which discards them by default. Register an error handler to observe all of them:
+
+```go
+subscriber, err := kafka.NewSubscriber(conf.Kafka, log, kafka.WithConsumerErrorHandler(func(e *kafka.ConsumerError) {
+    metrics.ConsumeErrors.WithLabelValues(e.Topic).Inc()
+    log.Errorf("consume error: %v", e)
+}))
+```
+
+- It receives errors from the consumer group, errors Sarama reports for a partition, and errors returned by your own message handler. A `ConsumerError` names the topic partition it came from (for a group-level error `Topic` is empty and `Partition` is `-1`) and wraps the underlying error, so `errors.Is` and `errors.As` work on it.
+- It is for observation only. It does not change how the consumer retries, commits or ends a session. To stop consuming, cancel the context passed to `Start*` or call `Close()`.
+- It is called from the consumer's goroutines, concurrently with your message handler and, with several partitions or `Concurrency` above 1, with itself. It must be safe for concurrent use and return quickly: a slow handler delays consuming, and errors Sarama has no room to queue are dropped.
+- Registering a handler is what makes Sarama report its errors on the group's error stream; the config you pass in is not modified. Without a handler nothing changes.
 
 ### Ordering and message keys
 
