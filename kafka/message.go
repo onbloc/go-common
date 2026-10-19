@@ -10,7 +10,11 @@ import (
 
 type Message struct {
 	Topic string
-	Key   string
+	// Key is the record key, raw bytes. A nil Key sends no key (a null key),
+	// and the message goes to a partition without ordering guarantees. An
+	// empty non-nil Key is a real key like any other: it is hashed, so all
+	// messages with an empty key land in the same partition.
+	Key []byte
 	// Value is the raw message payload. A nil Value publishes a Kafka
 	// tombstone (a null-value record used to mark a key for deletion on a
 	// compacted topic); a non-nil, possibly empty, Value publishes normally.
@@ -21,8 +25,10 @@ type Message struct {
 
 // Metadata describes where a message was written or read.
 type Metadata struct {
-	Topic     string
-	Key       string
+	Topic string
+	// Key is the record key. It is nil when the record has no key, which is
+	// not the same as an empty key.
+	Key       []byte
 	Partition int32
 	Offset    int64
 	// Headers and Timestamp are set on received messages. Timestamp is the
@@ -101,8 +107,10 @@ func toProducerMessage(message Message) (*sarama.ProducerMessage, error) {
 		Value: sarama.ByteEncoder(message.Value),
 	}
 
-	if message.Key != "" {
-		msg.Key = sarama.StringEncoder(message.Key)
+	// A nil key is sent as a null key, an empty non-nil key as an empty one:
+	// Kafka tells them apart, and so do partitioning and log compaction.
+	if message.Key != nil {
+		msg.Key = sarama.ByteEncoder(message.Key)
 	}
 
 	for _, header := range message.Headers {

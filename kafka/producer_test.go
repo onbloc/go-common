@@ -65,7 +65,7 @@ func TestPublishMessagePublishesNilValueAsTombstone(t *testing.T) {
 	fake := &fakeSyncProducer{}
 	p := newTestProducer(fake)
 
-	if err := p.PublishMessage(Message{Topic: "topic", Key: "key"}); err != nil {
+	if err := p.PublishMessage(Message{Topic: "topic", Key: []byte("key")}); err != nil {
 		t.Fatalf("PublishMessage() error = %v", err)
 	}
 

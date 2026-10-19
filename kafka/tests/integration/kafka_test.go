@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -75,7 +76,7 @@ func TestKafkaIntegration_HeadersAndTimestampRoundTrip(t *testing.T) {
 	before := time.Now().Add(-time.Minute)
 	err := env.producer.PublishMessage(commonkafka.Message{
 		Topic: env.topic,
-		Key:   "key-1",
+		Key:   []byte("key-1"),
 		Value: []byte("payload"),
 		Headers: []commonkafka.Header{
 			{Key: "trace-id", Value: []byte("abc")},
@@ -104,7 +105,7 @@ func TestKafkaIntegration_HeadersAndTimestampRoundTrip(t *testing.T) {
 
 	select {
 	case meta := <-received:
-		if meta.Key != "key-1" {
+		if string(meta.Key) != "key-1" {
 			t.Errorf("key = %q, want key-1", meta.Key)
 		}
 		if len(meta.Headers) != 3 ||
@@ -118,6 +119,65 @@ func TestKafkaIntegration_HeadersAndTimestampRoundTrip(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for the message")
+	}
+}
+
+// A null key, an empty key and a binary key must arrive as sent: Kafka tells
+// the first two apart and the key is raw bytes.
+func TestKafkaIntegration_KeyRoundTripKeepsNullEmptyAndBinary(t *testing.T) {
+	env := newTestEnv(t, "test-topic-keys", "test-consumer-group-keys")
+
+	binary := []byte{0xff, 0x00, 0x80, 'k'}
+	err := env.producer.PublishMessages([]commonkafka.Message{
+		{Topic: env.topic, Key: nil, Value: []byte("null")},
+		{Topic: env.topic, Key: []byte{}, Value: []byte("empty")},
+		{Topic: env.topic, Key: binary, Value: []byte("binary")},
+	})
+	if err != nil {
+		t.Fatalf("failed to publish messages: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+
+	var mu sync.Mutex
+	keys := map[string][]byte{}
+	done := make(chan struct{})
+	go func() {
+		err := env.consumer.StartListening(ctx, func(message []byte, meta commonkafka.Metadata, commit func() error) error {
+			mu.Lock()
+			keys[string(message)] = meta.Key
+			complete := len(keys) == 3
+			mu.Unlock()
+
+			if complete {
+				close(done)
+			}
+
+			return commit()
+		})
+		if err != nil && ctx.Err() == nil {
+			t.Logf("listener error: %v", err)
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for the messages")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if got := keys["null"]; got != nil {
+		t.Errorf("null key arrived as %#v, want nil", got)
+	}
+	if got := keys["empty"]; got == nil || len(got) != 0 {
+		t.Errorf("empty key arrived as %#v, want an empty non-nil key", got)
+	}
+	if got := keys["binary"]; !bytes.Equal(got, binary) {
+		t.Errorf("binary key arrived as %#v, want %#v", got, binary)
 	}
 }
 

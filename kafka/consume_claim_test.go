@@ -311,7 +311,7 @@ func TestConsumeClaimPassesMessageMetadataToHandler(t *testing.T) {
 	}
 
 	got := rec.batches[0][0]
-	if string(got.Value) != "value" || got.Metadata.Topic != "topic" || got.Metadata.Key != "key" || got.Metadata.Offset != 7 {
+	if string(got.Value) != "value" || got.Metadata.Topic != "topic" || string(got.Metadata.Key) != "key" || got.Metadata.Offset != 7 {
 		t.Fatalf("batch message = %+v", got)
 	}
 }

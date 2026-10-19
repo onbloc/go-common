@@ -88,10 +88,10 @@ if err != nil {
     return err
 }
 
-err = publisher.PublishMessage(kafka.Message{Topic: "orders", Key: "order-1", Value: []byte("{...}")})
+err = publisher.PublishMessage(kafka.Message{Topic: "orders", Key: []byte("order-1"), Value: []byte("{...}")})
 ```
 
-`Message.Value` is `[]byte`, so any payload encoding (JSON, protobuf, raw binary) works. A nil `Value` publishes a Kafka tombstone (a null-value record, typically used to mark a key for deletion on a compacted topic).
+`Message.Value` is `[]byte`, so any payload encoding (JSON, protobuf, raw binary) works. A nil `Value` publishes a Kafka tombstone (a null-value record, typically used to mark a key for deletion on a compacted topic). `Message.Key` is `[]byte` as well; leave it nil to send no key (see [Ordering and message keys](#ordering-and-message-keys)).
 
 `Message.Headers` carries optional record headers (for example a trace ID or schema version). Keys must not be empty; they may repeat and keep their order. Consumers receive them, along with the record `Timestamp`, in `Metadata`. The timestamp is the producer's create time or the broker's log-append time, depending on the topic's `message.timestamp.type`.
 
@@ -177,7 +177,9 @@ subscriber, err := kafka.NewSubscriber(conf.Kafka, log, kafka.WithConsumerErrorH
 
 ### Ordering and message keys
 
-Kafka orders messages only within a partition. The default partitioner hashes `Message.Key`, so messages with the same key go to the same partition and are consumed in publish order. A message with an empty key has no such guarantee: it goes to a random partition and has no ordering relative to other messages. To process messages strictly in order, publish them under one key; one consumer in the group then handles them at a time.
+Kafka orders messages only within a partition. The default partitioner hashes `Message.Key`, so messages with the same key go to the same partition and are consumed in publish order. A message with a nil `Key` (no key) has no such guarantee: it goes to a random partition and has no ordering relative to other messages. To process messages strictly in order, publish them under one key; one consumer in the group then handles them at a time.
+
+The key is raw bytes, and Kafka tells a missing key from an empty one: a nil `Key` is sent as a null key, while an empty non-nil `Key` (`[]byte{}`) is a real key like any other, so it is hashed and all messages with an empty key share one partition. The difference matters for partitioning and for compacted topics. `Metadata.Key` keeps it too: it is nil when the record has no key.
 
 ### Concurrency
 

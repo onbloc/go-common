@@ -55,7 +55,7 @@ func (p *Producer) PublishMessageWithMetadata(message Message) (Metadata, error)
 	}
 
 	// Monitoring: message published to the broker.
-	debugf(p.logger, "kafka published message: topic=%s key=%s partition=%d offset=%d", message.Topic, message.Key, partition, offset)
+	debugf(p.logger, "kafka published message: topic=%s key=%q partition=%d offset=%d", message.Topic, message.Key, partition, offset)
 
 	return Metadata{
 		Topic:     message.Topic,

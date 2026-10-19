@@ -28,8 +28,9 @@
 // WithConsumerErrorHandler to observe them.
 //
 // Kafka orders messages only within a partition: messages with the same
-// Message.Key are consumed in publish order, messages without a key are not
-// ordered relative to each other.
+// Message.Key are consumed in publish order, messages with a nil key are not
+// ordered relative to each other. Keys are raw bytes; a nil key and an empty
+// key are different in Kafka and stay different here.
 //
 // A Logger may be supplied through WithProducerLogger/WithConsumerLogger; any
 // type with Infof/Errorf methods satisfies it. A logger that also has Debugf
