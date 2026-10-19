@@ -1,6 +1,7 @@
 package kafka
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/IBM/sarama"
@@ -15,6 +16,10 @@ type Producer struct {
 }
 
 func NewProducer(config *ProducerConfig, opts ...Options[*Producer]) (*Producer, error) {
+	if config == nil {
+		return nil, errors.New("kafka producer config is required")
+	}
+
 	producer, err := sarama.NewSyncProducer(config.Brokers, config.ProducerConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Kafka producer: %w", err)

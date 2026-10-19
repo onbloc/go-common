@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -18,6 +19,10 @@ type Consumer struct {
 }
 
 func NewConsumer(config *ConsumerConfig, opts ...Options[*Consumer]) (*Consumer, error) {
+	if config == nil {
+		return nil, errors.New("kafka consumer config is required")
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	c := &Consumer{
@@ -117,6 +122,10 @@ type ConcurrentConsumer struct {
 }
 
 func NewConcurrentConsumer(config *ConsumerConfig, opts ...Options[*Consumer]) (*ConcurrentConsumer, error) {
+	if config == nil {
+		return nil, errors.New("kafka consumer config is required")
+	}
+
 	concurrency := config.Concurrency
 	if concurrency <= 0 {
 		concurrency = 1
