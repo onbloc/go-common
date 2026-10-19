@@ -117,9 +117,9 @@ func (s *SecurityConfig) validate() []error {
 
 	var errs []error
 
-	errs = appendUnlessOneOf(errs, "security.protocol", s.Protocol, "PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL")
+	errs = appendUnlessOneOf(errs, "security.protocol", s.Protocol, protocolPlaintext, protocolSSL, protocolSASLPlaintext, protocolSASLSSL)
 
-	if s.Protocol == "SASL_PLAINTEXT" || s.Protocol == "SASL_SSL" {
+	if s.Protocol == protocolSASLPlaintext || s.Protocol == protocolSASLSSL {
 		errs = appendUnlessOneOf(errs, "security.sasl_mechanism", s.SASLMechanism, "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512")
 		if s.SASLMechanism == "" {
 			errs = append(errs, fmt.Errorf("security.sasl_mechanism is required for protocol %s", s.Protocol))

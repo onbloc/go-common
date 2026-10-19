@@ -14,11 +14,11 @@ func applyKafkaSecurity(sc *sarama.Config, sec *SecurityConfig) error {
 		return nil
 	}
 
-	if sec.Protocol == "SASL_SSL" || sec.Protocol == "SASL_PLAINTEXT" {
+	if sec.Protocol == protocolSASLSSL || sec.Protocol == protocolSASLPlaintext {
 		applyKafkaSASL(sc, sec)
 	}
 
-	if sec.Protocol == "SSL" || sec.Protocol == "SASL_SSL" {
+	if sec.Protocol == protocolSSL || sec.Protocol == protocolSASLSSL {
 		if err := applyKafkaTLS(sc, sec); err != nil {
 			return err
 		}
@@ -96,3 +96,11 @@ func loadKafkaRootCAs(caFile string) (*x509.CertPool, error) {
 
 	return certPool, nil
 }
+
+// Supported values of SecurityConfig.Protocol.
+const (
+	protocolPlaintext     = "PLAINTEXT"
+	protocolSSL           = "SSL"
+	protocolSASLPlaintext = "SASL_PLAINTEXT"
+	protocolSASLSSL       = "SASL_SSL"
+)

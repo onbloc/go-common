@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+const unsupportedCompression = "brotli"
+
 func validConfig() *Config {
 	conf := DefaultConfig()
 	conf.Brokers = []string{"localhost:9092"}
@@ -50,6 +52,7 @@ func TestDefaultTagsMatchDefaultConfig(t *testing.T) {
 			}
 
 			var rendered string
+			//nolint:exhaustive // only the kinds used by the default tags are rendered; others fail below
 			switch got.Kind() {
 			case reflect.String:
 				rendered = got.String()
@@ -105,7 +108,7 @@ func TestValidateRejectsUnrecognizedAndOutOfRangeValues(t *testing.T) {
 	}{
 		{"no brokers", func(c *Config) { c.Brokers = []string{" "} }, "brokers are required"},
 		{"unknown acks", func(c *Config) { c.Producer.RequiredAcks = "quorum" }, "producer.required_acks"},
-		{"unknown compression", func(c *Config) { c.Producer.Compression = "brotli" }, "producer.compression"},
+		{"unknown compression", func(c *Config) { c.Producer.Compression = unsupportedCompression }, "producer.compression"},
 		{"negative retries", func(c *Config) { c.Producer.MaxRetries = &negative }, "producer.max_retries"},
 		{"zero retries with idempotence", func(c *Config) { c.Producer.MaxRetries = &zero }, "enable_idempotence"},
 		{"negative backoff", func(c *Config) { c.Producer.RetryBackoffMs = -1 }, "producer.retry_backoff_ms"},
@@ -115,11 +118,11 @@ func TestValidateRejectsUnrecognizedAndOutOfRangeValues(t *testing.T) {
 		{"heartbeat not below session", func(c *Config) { c.Consumer.HeartbeatMs = c.Consumer.SessionTimeoutMs }, "heartbeat_ms"},
 		{"unknown protocol", func(c *Config) { c.Security.Protocol = "TLS" }, "security.protocol"},
 		{"sasl without mechanism", func(c *Config) {
-			c.Security.Protocol = "SASL_SSL"
+			c.Security.Protocol = protocolSASLSSL
 			c.Security.SASLUsername = "u"
 		}, "sasl_mechanism is required"},
 		{"sasl without username", func(c *Config) {
-			c.Security.Protocol = "SASL_SSL"
+			c.Security.Protocol = protocolSASLSSL
 			c.Security.SASLMechanism = "PLAIN"
 		}, "sasl_username is required"},
 	}
@@ -139,7 +142,7 @@ func TestValidateRejectsUnrecognizedAndOutOfRangeValues(t *testing.T) {
 
 func TestValidateReportsAllProblems(t *testing.T) {
 	conf := validConfig()
-	conf.Producer.Compression = "brotli"
+	conf.Producer.Compression = unsupportedCompression
 	conf.Consumer.Group = ""
 
 	err := conf.Validate()
@@ -166,7 +169,7 @@ func TestNewProducerConfigByHonorsExplicitZeroRetriesWithoutIdempotence(t *testi
 
 func TestNewProducerConfigByRejectsInvalidConfig(t *testing.T) {
 	conf := validConfig()
-	conf.Producer.Compression = "brotli"
+	conf.Producer.Compression = unsupportedCompression
 
 	if _, err := NewProducerConfigBy(conf); err == nil {
 		t.Fatal("expected validation error")

@@ -17,7 +17,7 @@ const (
 	defaultRequiredAcks    = "all"
 	defaultCompression     = "lz4"
 	defaultAutoOffsetReset = "earliest"
-	defaultSecurityProto   = "PLAINTEXT"
+	defaultSecurityProto   = protocolPlaintext
 
 	defaultProducerMaxRetries      = 3
 	defaultProducerRetryBackoffMs  = 100
