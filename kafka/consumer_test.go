@@ -315,3 +315,129 @@ func TestConsumeClaimPassesMessageMetadataToHandler(t *testing.T) {
 		t.Fatalf("batch message = %+v", got)
 	}
 }
+
+// claimGroup runs one claim with a single message through the handler on every
+// Consume call and returns nil, as Sarama's Consume does after a session ends.
+type claimGroup struct {
+	sarama.ConsumerGroup
+
+	mu        sync.Mutex
+	calls     []time.Time
+	claimErrs []error
+}
+
+func (g *claimGroup) Consume(ctx context.Context, _ []string, handler sarama.ConsumerGroupHandler) error {
+	g.mu.Lock()
+	g.calls = append(g.calls, time.Now())
+	g.mu.Unlock()
+
+	claim := newFakeClaim()
+	claim.send(0)
+	close(claim.messages)
+
+	// Sarama reports a claim's error and ends the session; Consume returns nil.
+	err := handler.ConsumeClaim(newFakeSession(ctx), claim)
+
+	g.mu.Lock()
+	g.claimErrs = append(g.claimErrs, err)
+	g.mu.Unlock()
+
+	return nil
+}
+
+func (g *claimGroup) Close() error { return nil }
+
+func (g *claimGroup) claimErrors() []error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	return append([]error(nil), g.claimErrs...)
+}
+
+func (g *claimGroup) callTimes() []time.Time {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	return append([]time.Time(nil), g.calls...)
+}
+
+// listen runs StartBatchListening on c until n Consume calls were made, then
+// stops it and returns when each call happened.
+func listen(t *testing.T, c *Consumer, group *claimGroup, handler BatchMessageHandler, n int) []time.Time {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := c.StartBatchListening(ctx, BatchConfig{MaxMessages: 1, FlushInterval: time.Hour}, handler); !errors.Is(err, context.Canceled) {
+			t.Errorf("StartBatchListening() error = %v, want context.Canceled", err)
+		}
+	}()
+
+	deadline := time.After(10 * time.Second)
+	for len(group.callTimes()) < n {
+		select {
+		case <-deadline:
+			t.Fatalf("only %d Consume calls in time, want %d", len(group.callTimes()), n)
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	cancel()
+	<-done
+
+	return group.callTimes()
+}
+
+// A handler error ends the session without Consume returning an error. The
+// consumer must wait before rejoining, or one message that always fails would
+// rebalance the group in a tight loop.
+func TestConsumerBacksOffAfterAHandlerError(t *testing.T) {
+	const backoff = 100 * time.Millisecond
+
+	group := &claimGroup{}
+	c := newTestConsumer(group, nil)
+	c.retryBackoff = backoff
+
+	calls := listen(t, c, group, func([]BatchMessage, func() error) error { return errors.New("poison") }, 3)
+
+	// The premise: a handler error comes back from ConsumeClaim, ending the
+	// session. The last Consume call may have started after the listener was
+	// stopped, and a claim whose session is already over returns nil, so only
+	// the calls that were followed by another one are checked.
+	for i, err := range group.claimErrors()[:2] {
+		if err == nil {
+			t.Fatalf("ConsumeClaim %d returned nil, want the handler error", i+1)
+		}
+	}
+
+	for i := 1; i < 3; i++ {
+		if gap := calls[i].Sub(calls[i-1]); gap < backoff*8/10 {
+			t.Fatalf("gap before Consume call %d = %v, want at least ~%v after a handler error", i+1, gap, backoff)
+		}
+	}
+}
+
+// A session that ends normally (rebalance, shutdown) must rejoin at once; the
+// backoff is only for failures.
+func TestConsumerRejoinsAtOnceAfterANormalSession(t *testing.T) {
+	group := &claimGroup{}
+	c := newTestConsumer(group, nil)
+	c.retryBackoff = time.Second
+
+	start := time.Now()
+	listen(t, c, group, func(_ []BatchMessage, commit func() error) error { return commit() }, 5)
+
+	for i, err := range group.claimErrors() {
+		if err != nil {
+			t.Fatalf("ConsumeClaim %d returned %v, want nil after a commit", i+1, err)
+		}
+	}
+
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("5 normal sessions took %v, want an immediate rejoin with no backoff", elapsed)
+	}
+}

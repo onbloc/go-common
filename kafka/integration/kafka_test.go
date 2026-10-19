@@ -652,3 +652,38 @@ func requireNoMessage(t *testing.T, ch <-chan string) {
 	case <-time.After(200 * time.Millisecond):
 	}
 }
+
+// A handler that always fails must not cycle the group faster than the
+// consumer's backoff: each redelivery waits at least about a second.
+func TestKafkaIntegration_HandlerErrorBacksOffBeforeRejoining(t *testing.T) {
+	env := newTestEnv(t, "test-topic-backoff", "test-consumer-group-backoff")
+	env.publishMessage(t, "poison")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	var mu sync.Mutex
+	var stamps []time.Time
+	err := env.consumer.StartListening(ctx, func([]byte, commonkafka.Metadata, func() error) error {
+		mu.Lock()
+		stamps = append(stamps, time.Now())
+		mu.Unlock()
+
+		return errors.New("poison")
+	})
+	if err != nil && ctx.Err() == nil {
+		t.Fatalf("listener error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(stamps) < 3 {
+		t.Fatalf("handler calls = %d in 8s, want at least 3 redeliveries to compare", len(stamps))
+	}
+	for i := 1; i < len(stamps); i++ {
+		if gap := stamps[i].Sub(stamps[i-1]); gap < 900*time.Millisecond {
+			t.Errorf("redelivery %d came after %v, want at least ~1s of backoff", i, gap)
+		}
+	}
+}

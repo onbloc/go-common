@@ -73,6 +73,7 @@ func newTestConsumer(group sarama.ConsumerGroup, handler func(*ConsumerError)) *
 		ctx:           ctx,
 		cancel:        cancel,
 		errorHandler:  handler,
+		retryBackoff:  10 * time.Millisecond,
 	}
 }
 

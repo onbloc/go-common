@@ -140,7 +140,7 @@ Delivery is at-least-once. The consumer never commits offsets on its own (auto-c
 
 ### Handler errors
 
-When a handler returns an error, the module logs it through `Logger.Errorf` and returns it from the partition's claim. Sarama ends the whole group session as soon as any claim returns, so every partition of this consumer stops, the consumer joins the group again, and the uncommitted batch is delivered again. A message that can never succeed therefore blocks its partition and is retried in a loop.
+When a handler returns an error, the module logs it through `Logger.Errorf` and returns it from the partition's claim. Sarama ends the whole group session as soon as any claim returns, so every partition of this consumer stops, the consumer waits one second, joins the group again, and the uncommitted batch is delivered again. A message that can never succeed therefore blocks its partition and is retried in a loop, at most about once a second; the wait keeps such a message from rebalancing the group in a tight loop. A session that ends normally (a rebalance, a shutdown) is rejoined at once.
 
 There is no built-in retry, skip, or dead-letter policy; decide in the handler:
 

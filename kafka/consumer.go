@@ -4,10 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/IBM/sarama"
 )
+
+// defaultRetryBackoff is how long a consumer waits before it consumes again
+// after an error or a failed handler.
+const defaultRetryBackoff = time.Second
 
 type Consumer struct {
 	logger        Logger
@@ -16,6 +21,7 @@ type Consumer struct {
 	cancel        context.CancelFunc
 	topics        []string
 	errorHandler  func(*ConsumerError)
+	retryBackoff  time.Duration
 }
 
 func NewConsumer(config *ConsumerConfig, opts ...Options[*Consumer]) (*Consumer, error) {
@@ -26,10 +32,11 @@ func NewConsumer(config *ConsumerConfig, opts ...Options[*Consumer]) (*Consumer,
 	ctx, cancel := context.WithCancel(context.Background())
 
 	c := &Consumer{
-		topics: config.Topics,
-		logger: defaultLogger(),
-		ctx:    ctx,
-		cancel: cancel,
+		topics:       config.Topics,
+		logger:       defaultLogger(),
+		ctx:          ctx,
+		cancel:       cancel,
+		retryBackoff: defaultRetryBackoff,
 	}
 
 	// Options come first: the error handler decides how the group is configured.
@@ -87,6 +94,8 @@ func (c *Consumer) StartBatchListening(ctx context.Context, config BatchConfig, 
 			return listenerCtx.Err()
 		default:
 			err := c.consumerGroup.Consume(listenerCtx, c.topics, consumerHandler)
+			handlerFailed := consumerHandler.failed.Swap(false)
+
 			if err != nil {
 				if listenerCtx.Err() != nil {
 					return listenerCtx.Err()
@@ -94,11 +103,17 @@ func (c *Consumer) StartBatchListening(ctx context.Context, config BatchConfig, 
 
 				c.logger.Errorf("Error consuming batch messages: %v", err)
 				c.reportError(newGroupError(err))
+			}
 
+			// A normal rebalance rejoins at once. After a failure, wait: a handler
+			// error ends the session without Consume returning an error, and a
+			// message that always fails would otherwise rejoin and rebalance the
+			// group in a tight loop.
+			if err != nil || handlerFailed {
 				select {
 				case <-listenerCtx.Done():
 					return listenerCtx.Err()
-				case <-time.After(1 * time.Second):
+				case <-time.After(c.retryBackoff):
 				}
 			}
 		}
@@ -202,6 +217,9 @@ type batchConsumerHandler struct {
 	logger          Logger
 	batchConfig     BatchConfig
 	metadataHandler BatchMessageHandler
+	// failed is set when the message handler returned an error, which ends the
+	// group session. The consume loop reads it to back off before rejoining.
+	failed atomic.Bool
 }
 
 func (h *batchConsumerHandler) Setup(sarama.ConsumerGroupSession) error {
@@ -312,6 +330,7 @@ func (h *batchConsumerHandler) consumeBatch(session sarama.ConsumerGroupSession,
 
 	if err := h.metadataHandler(batchMessages, commit); err != nil {
 		h.logger.Errorf("Failed to process message batch: topic=%s count=%d offsets=%d..%d error=%v", topic, len(messages), firstOffset, lastOffset, err)
+		h.failed.Store(true)
 
 		return err
 	}
