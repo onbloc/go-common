@@ -163,7 +163,7 @@ func TestKafkaIntegration_PublishMessageTooLarge(t *testing.T) {
 		Brokers:  []string{sharedKafkaBroker},
 		ClientID: "test-client-publish-too-large",
 		Producer: &commonkafka.ProducerSettings{
-			RequiredAcks:    "all",
+			Acks:            "all",
 			RetryBackoffMs:  100,
 			Compression:     "lz4",
 			MaxMessageBytes: 1024,
@@ -378,7 +378,7 @@ func newTestEnv(t *testing.T, topic, consumerGroup string) *testEnv {
 		Brokers:  []string{sharedKafkaBroker},
 		ClientID: "test-client-" + topic,
 		Producer: &commonkafka.ProducerSettings{
-			RequiredAcks:   "all",
+			Acks:           "all",
 			RetryBackoffMs: 100,
 			Compression:    "lz4",
 		},
@@ -406,7 +406,7 @@ func newLargeMessageTestEnv(t *testing.T, topic, consumerGroup string) *testEnv 
 		Brokers:  []string{sharedKafkaBroker},
 		ClientID: "test-client-" + topic,
 		Producer: &commonkafka.ProducerSettings{
-			RequiredAcks:      "all",
+			Acks:              "all",
 			RetryBackoffMs:    100,
 			Compression:       "lz4",
 			MaxMessageBytes:   5 * 1024 * 1024,

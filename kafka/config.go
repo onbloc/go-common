@@ -14,7 +14,6 @@ import (
 // keeps the two in sync. They are applied by DefaultConfig, and as a fallback
 // when a field is left unset in a Config built without a loader.
 const (
-	defaultRequiredAcks    = "all"
 	defaultCompression     = "lz4"
 	defaultAutoOffsetReset = "earliest"
 	defaultSecurityProto   = protocolPlaintext
@@ -43,7 +42,7 @@ func DefaultConfig() *Config {
 
 	return &Config{
 		Producer: &ProducerSettings{
-			RequiredAcks:      defaultRequiredAcks,
+			Acks:              AcksAll,
 			Compression:       defaultCompression,
 			MaxRetries:        &maxRetries,
 			RetryBackoffMs:    defaultProducerRetryBackoffMs,
@@ -81,7 +80,7 @@ type Config struct {
 }
 
 type ProducerSettings struct {
-	RequiredAcks    string `mapstructure:"required_acks" default:"all"`
+	Acks            Acks   `mapstructure:"acks" default:"all"`
 	Compression     string `mapstructure:"compression" default:"lz4"`
 	RetryBackoffMs  int    `mapstructure:"retry_backoff_ms" default:"100"`
 	MaxOpenRequests int    `mapstructure:"max_open_requests" default:"1"`
@@ -254,7 +253,7 @@ func buildConsumerConfig(conf *Config) (*sarama.Config, error) {
 }
 
 func applyProducerSettings(sc *sarama.Config, p *ProducerSettings) {
-	sc.Producer.RequiredAcks = parseKafkaRequiredAcks(p.RequiredAcks)
+	sc.Producer.RequiredAcks = parseKafkaAcks(p.Acks)
 	sc.Producer.Compression = parseKafkaCompression(p.Compression)
 	sc.Producer.Retry.Max = effectiveMaxRetries(p.MaxRetries)
 	sc.Producer.Retry.Backoff = time.Duration(defaultIfZero(p.RetryBackoffMs, defaultProducerRetryBackoffMs)) * time.Millisecond

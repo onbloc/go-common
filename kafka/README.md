@@ -42,7 +42,7 @@ func LoadConfig() (*Config, error) {
 kafka:
   brokers: ["localhost:9092"]
   producer:
-    required_acks: all
+    acks: all
     compression: lz4
   consumer:
     topics: ["orders"]
@@ -64,9 +64,21 @@ if err := conf.Validate(); err != nil {
 }
 ```
 
-`Validate` reports every problem at once: missing brokers, group or topics, unrecognized `required_acks` / `compression` / `auto_offset_reset` / `protocol` / `sasl_mechanism` values, negative numbers, a heartbeat not shorter than the session timeout, and `max_retries: 0` while idempotence is on. A nil `producer` or `consumer` section is valid, so a producer-only service need not configure a consumer. `NewPublisher` and `NewSubscriber` validate only the sections they use.
+`Validate` reports every problem at once: missing brokers, group or topics, unrecognized `acks` / `compression` / `auto_offset_reset` / `protocol` / `sasl_mechanism` values, negative numbers, a heartbeat not shorter than the session timeout, and `max_retries: 0` while idempotence is on. A nil `producer` or `consumer` section is valid, so a producer-only service need not configure a consumer. `NewPublisher` and `NewSubscriber` validate only the sections they use.
 
 Unset numeric fields resolve to their defaults. `max_retries` and `enable_idempotence` are pointers so an explicit `0` / `false` is honored rather than treated as unset.
+
+### Producer acknowledgements
+
+`producer.acks` is Kafka's `acks` setting: how many broker acknowledgements a publish waits for before it succeeds. Use the Kafka values; `none` and `local` are accepted as aliases.
+
+| Value | Alias | Waits for |
+| --- | --- | --- |
+| `0` | `none` | nothing; a message can be lost without the producer noticing |
+| `1` | `local` | the partition leader to write it |
+| `all` (default) | `-1` | every in-sync replica |
+
+Any other value is rejected by `Validate`. An idempotent producer (`enable_idempotence`, on by default) always uses `all`, whatever is set here; turn idempotence off to use `0` or `1`. In YAML or an environment variable an unquoted `1` works, and in code the typed constants `kafka.AcksNone`, `kafka.AcksLeader` and `kafka.AcksAll` are available.
 
 ### Publishing
 

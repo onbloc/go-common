@@ -107,7 +107,7 @@ func TestValidateRejectsUnrecognizedAndOutOfRangeValues(t *testing.T) {
 		want   string
 	}{
 		{"no brokers", func(c *Config) { c.Brokers = []string{" "} }, "brokers are required"},
-		{"unknown acks", func(c *Config) { c.Producer.RequiredAcks = "quorum" }, "producer.required_acks"},
+		{"unknown acks", func(c *Config) { c.Producer.Acks = "quorum" }, "producer.acks"},
 		{"unknown compression", func(c *Config) { c.Producer.Compression = unsupportedCompression }, "producer.compression"},
 		{"negative retries", func(c *Config) { c.Producer.MaxRetries = &negative }, "producer.max_retries"},
 		{"zero retries with idempotence", func(c *Config) { c.Producer.MaxRetries = &zero }, "enable_idempotence"},
