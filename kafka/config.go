@@ -1,7 +1,6 @@
 package kafka
 
 import (
-	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -157,15 +156,7 @@ type ConsumerConfig struct {
 }
 
 func NewProducerConfigBy(conf *Config) (*ProducerConfig, error) {
-	if conf == nil {
-		return nil, fmt.Errorf("kafka config is required for Kafka producer")
-	}
-
-	if conf.Producer == nil {
-		return nil, fmt.Errorf("producer config is required for Kafka producer")
-	}
-
-	if err := conf.validateProducer(); err != nil {
+	if err := conf.ValidateProducer(); err != nil {
 		return nil, err
 	}
 
@@ -181,15 +172,7 @@ func NewProducerConfigBy(conf *Config) (*ProducerConfig, error) {
 }
 
 func NewConsumerConfigBy(conf *Config) (*ConsumerConfig, error) {
-	if conf == nil {
-		return nil, fmt.Errorf("kafka config is required for Kafka consumer")
-	}
-
-	if conf.Consumer == nil {
-		return nil, fmt.Errorf("consumer config is required for Kafka consumer")
-	}
-
-	if err := conf.validateConsumer(); err != nil {
+	if err := conf.ValidateConsumer(); err != nil {
 		return nil, err
 	}
 

@@ -73,27 +73,13 @@ func TestDefaultTagsMatchDefaultConfig(t *testing.T) {
 	walk("Config", reflect.ValueOf(Config{}), reflect.ValueOf(*DefaultConfig()))
 }
 
-func TestDefaultConfigIsValidOnceConnectionFieldsAreSet(t *testing.T) {
+func TestDefaultConfigIsValidOnceBrokersAreSet(t *testing.T) {
 	if err := DefaultConfig().Validate(); err == nil {
-		t.Fatal("expected brokers/group/topics to be reported as missing")
+		t.Fatal("expected the missing brokers to be reported")
 	}
 
 	if err := validConfig().Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
-	}
-}
-
-func TestValidateAllowsProducerOnlyAndConsumerOnly(t *testing.T) {
-	producerOnly := validConfig()
-	producerOnly.Consumer = nil
-	if err := producerOnly.Validate(); err != nil {
-		t.Fatalf("producer-only Validate() error = %v", err)
-	}
-
-	consumerOnly := validConfig()
-	consumerOnly.Producer = nil
-	if err := consumerOnly.Validate(); err != nil {
-		t.Fatalf("consumer-only Validate() error = %v", err)
 	}
 }
 
@@ -113,8 +99,6 @@ func TestValidateRejectsUnrecognizedAndOutOfRangeValues(t *testing.T) {
 		{"zero retries with idempotence", func(c *Config) { c.Producer.MaxRetries = &zero }, "enable_idempotence"},
 		{"negative backoff", func(c *Config) { c.Producer.RetryBackoffMs = -1 }, "producer.retry_backoff_ms"},
 		{"unknown offset reset", func(c *Config) { c.Consumer.AutoOffsetReset = "oldest" }, "consumer.auto_offset_reset"},
-		{"missing group", func(c *Config) { c.Consumer.Group = "" }, "consumer.group"},
-		{"blank topics", func(c *Config) { c.Consumer.Topics = []string{" , "} }, "consumer.topics"},
 		{"heartbeat not below session", func(c *Config) { c.Consumer.HeartbeatMs = c.Consumer.SessionTimeoutMs }, "heartbeat_ms"},
 		{"unknown protocol", func(c *Config) { c.Security.Protocol = "TLS" }, "security.protocol"},
 		{"sasl without mechanism", func(c *Config) {
@@ -143,11 +127,67 @@ func TestValidateRejectsUnrecognizedAndOutOfRangeValues(t *testing.T) {
 func TestValidateReportsAllProblems(t *testing.T) {
 	conf := validConfig()
 	conf.Producer.Compression = unsupportedCompression
-	conf.Consumer.Group = ""
+	conf.Consumer.Concurrency = -1
 
 	err := conf.Validate()
-	if err == nil || !strings.Contains(err.Error(), "producer.compression") || !strings.Contains(err.Error(), "consumer.group") {
+	if err == nil || !strings.Contains(err.Error(), "producer.compression") || !strings.Contains(err.Error(), "consumer.concurrency") {
 		t.Fatalf("Validate() error = %v, want both problems reported", err)
+	}
+}
+
+// A loader that applies `default` tags fills both sections even when the
+// service uses one role, so a present consumer section with no group or topics
+// must not fail the config of a producer-only service.
+func TestValidateAcceptsLoaderShapedProducerOnlyConfig(t *testing.T) {
+	conf := DefaultConfig()
+	conf.Brokers = []string{"localhost:9092"}
+
+	if err := conf.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want a producer-only config accepted", err)
+	}
+	if err := conf.ValidateProducer(); err != nil {
+		t.Fatalf("ValidateProducer() error = %v", err)
+	}
+
+	err := conf.ValidateConsumer()
+	if err == nil || !strings.Contains(err.Error(), "consumer.group") || !strings.Contains(err.Error(), "consumer.topics") {
+		t.Fatalf("ValidateConsumer() error = %v, want the missing group and topics reported", err)
+	}
+}
+
+func TestValidateConsumerRequiresGroupAndTopics(t *testing.T) {
+	for name, mutate := range map[string]func(*Config){
+		"missing group": func(c *Config) { c.Consumer.Group = "" },
+		"blank topics":  func(c *Config) { c.Consumer.Topics = []string{" , "} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			conf := validConfig()
+			mutate(conf)
+
+			if err := conf.ValidateConsumer(); err == nil {
+				t.Fatal("ValidateConsumer() expected an error")
+			}
+		})
+	}
+}
+
+func TestValidateRolesRequireTheirSection(t *testing.T) {
+	noProducer := validConfig()
+	noProducer.Producer = nil
+	if err := noProducer.ValidateProducer(); err == nil {
+		t.Fatal("ValidateProducer() expected an error without a producer section")
+	}
+	if err := noProducer.ValidateConsumer(); err != nil {
+		t.Fatalf("ValidateConsumer() error = %v, want it independent of the producer", err)
+	}
+
+	noConsumer := validConfig()
+	noConsumer.Consumer = nil
+	if err := noConsumer.ValidateConsumer(); err == nil {
+		t.Fatal("ValidateConsumer() expected an error without a consumer section")
+	}
+	if err := noConsumer.ValidateProducer(); err != nil {
+		t.Fatalf("ValidateProducer() error = %v, want it independent of the consumer", err)
 	}
 }
 

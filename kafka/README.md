@@ -65,7 +65,9 @@ if err := conf.Validate(); err != nil {
 }
 ```
 
-`Validate` reports every problem at once: missing brokers, group or topics, unrecognized `acks` / `compression` / `auto_offset_reset` / `protocol` / `sasl_mechanism` values, negative numbers, a heartbeat not shorter than the session timeout, and `max_retries: 0` while idempotence is on. A nil `producer` or `consumer` section is valid, so a producer-only service need not configure a consumer. `NewPublisher` and `NewSubscriber` validate only the sections they use.
+`Validate` reports every problem with the values at once: missing brokers, unrecognized `acks` / `compression` / `auto_offset_reset` / `protocol` / `sasl_mechanism` values, negative numbers, a heartbeat not shorter than the session timeout, and `max_retries: 0` while idempotence is on.
+
+`Validate` does not require a role to be configured, so it is safe to call at bootstrap in a producer-only or consumer-only service. This matters with a loader that applies `default` tags (such as `go-common/config`): it fills both the `producer` and `consumer` sections with defaults even when your service uses only one. What a role cannot run without is checked by `ValidateProducer` (a producer section) and `ValidateConsumer` (a consumer section with a group and at least one topic); `NewPublisher` and `NewSubscriber` apply them too, so a missing consumer group is reported when the subscriber is built, or earlier if you call `ValidateConsumer` yourself.
 
 Unset numeric fields resolve to their defaults. `max_retries` and `enable_idempotence` are pointers so an explicit `0` / `false` is honored rather than treated as unset.
 

@@ -6,14 +6,18 @@ import (
 	"strings"
 )
 
-// Validate reports every problem found in c, joined into one error. It checks
-// the brokers and security settings, and each of the producer and consumer
-// sections that is present. A nil section is valid here: a producer-only
-// service need not configure a consumer.
+// Validate reports every problem with the values in c, joined into one error:
+// brokers, security, and the settings of each producer and consumer section
+// that is present. Unset (zero) tuning fields are valid and resolve to their
+// documented defaults; Validate only rejects values that are out of range, not
+// recognized, or that contradict each other.
 //
-// Unset (zero) tuning fields are valid and resolve to their documented
-// defaults; Validate only rejects values that are out of range or not
-// recognized, which would otherwise be silently replaced by a default.
+// Validate does not require a role to be configured. A config decoded by a
+// loader that applies `default` tags has both sections filled with defaults,
+// even in a producer-only service, so a section that is present proves
+// nothing. What a role cannot run without (a consumer's group and topics) is
+// checked by ValidateProducer and ValidateConsumer, which NewPublisher and
+// NewSubscriber also apply.
 func (c *Config) Validate() error {
 	if c == nil {
 		return errors.New("kafka config is required")
@@ -30,17 +34,35 @@ func (c *Config) Validate() error {
 	return errors.Join(errs...)
 }
 
-// validateProducer checks only what NewPublisher depends on.
-func (c *Config) validateProducer() error {
+// ValidateProducer checks that c can build a Publisher: Validate's checks of
+// the brokers, security and producer values, and that a producer section exists.
+func (c *Config) ValidateProducer() error {
+	if c == nil {
+		return errors.New("kafka config is required")
+	}
+	if c.Producer == nil {
+		return errors.New("kafka producer config is required")
+	}
+
 	errs := c.validateCommon()
 	errs = append(errs, c.Producer.validate()...)
 
 	return errors.Join(errs...)
 }
 
-// validateConsumer checks only what NewSubscriber depends on.
-func (c *Config) validateConsumer() error {
+// ValidateConsumer checks that c can build a Subscriber: Validate's checks of
+// the brokers, security and consumer values, and that a consumer section exists
+// with a group and at least one topic.
+func (c *Config) ValidateConsumer() error {
+	if c == nil {
+		return errors.New("kafka config is required")
+	}
+	if c.Consumer == nil {
+		return errors.New("kafka consumer config is required")
+	}
+
 	errs := c.validateCommon()
+	errs = append(errs, c.Consumer.validateRequired()...)
 	errs = append(errs, c.Consumer.validate()...)
 
 	return errors.Join(errs...)
@@ -83,7 +105,8 @@ func (p *ProducerSettings) validate() []error {
 	return errs
 }
 
-func (c *ConsumerSettings) validate() []error {
+// validateRequired checks what a subscriber cannot run without.
+func (c *ConsumerSettings) validateRequired() []error {
 	var errs []error
 
 	if c.Group == "" {
@@ -92,6 +115,13 @@ func (c *ConsumerSettings) validate() []error {
 	if len(normalizeKafkaTopics(c.Topics)) == 0 {
 		errs = append(errs, errors.New("consumer.topics are required"))
 	}
+
+	return errs
+}
+
+// validate checks the values of the consumer settings.
+func (c *ConsumerSettings) validate() []error {
+	var errs []error
 
 	errs = appendUnlessOneOf(errs, "consumer.auto_offset_reset", c.AutoOffsetReset, "earliest", "latest")
 	errs = appendIfNegative(errs, "consumer.concurrency", c.Concurrency)
