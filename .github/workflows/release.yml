@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: Module to release
+        required: true
+        type: choice
+        options:
+          - config
+          - kafka
+      bump:
+        description: Version component to increment
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+
+concurrency:
+  group: release-${{ inputs.module }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Tag and release ${{ inputs.module }}
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ inputs.module }}/go.mod
+          cache: false
+
+      - name: Test module
+        working-directory: ${{ inputs.module }}
+        run: go test -race ./...
+
+      - name: Resolve next tag
+        id: tag
+        env:
+          MODULE: ${{ inputs.module }}
+          BUMP: ${{ inputs.bump }}
+        run: ./.github/scripts/next-tag.sh "$MODULE" "$BUMP" >> "$GITHUB_OUTPUT"
+
+      - name: Push annotated tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/${TAG}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          PREV: ${{ steps.tag.outputs.prev }}
+        run: |
+          args=(--verify-tag --title "$TAG" --generate-notes)
+          if [ -n "$PREV" ]; then args+=(--notes-start-tag "$PREV"); fi
+          gh release create "$TAG" "${args[@]}"

@@ -144,7 +144,15 @@ module-b/v1.0.0
 
 Releasing one module does not change another module's version. A release currently requires only an immutable annotated Git tag on a commit merged into `main`; no artifact upload is required.
 
-For the first public `config` release:
+Releases are created by the `Release` GitHub Actions workflow (Actions > Release > Run workflow, branch `main`):
+
+1. Merge the change into `main` and confirm CI passes.
+2. Select the `module` and the `bump` (`patch`, `minor` or `major`). The workflow finds the module's latest `<module>/vX.Y.Z` tag, increments the selected component, runs the module's tests, pushes an annotated tag and creates a GitHub release with generated notes.
+3. The first release of a module is `v0.1.0` (or `vN.0.0` for a `/vN` module path).
+4. A `major` bump fails unless the module path already ends in the new major (see below); update `go.mod` and imports first.
+5. New modules must be added to the `module` options in `.github/workflows/release.yml`.
+
+For reference, the manual procedure used for the first public `config` release (`config/v0.1.0`):
 
 1. Merge the license and public documentation into `main`, and confirm CI passes.
 2. Review all branches and repository history for material that must remain private, then make the repository public.
