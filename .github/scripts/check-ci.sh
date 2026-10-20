@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
-# Fails unless every check run on $GITHUB_SHA (except the current workflow run) succeeded.
-# Requires GH_TOKEN, GITHUB_REPOSITORY, GITHUB_SHA and GITHUB_RUN_ID.
+# Fails unless the latest ci.yml push run on $GITHUB_SHA succeeded.
+# Requires GH_TOKEN, GITHUB_REPOSITORY and GITHUB_SHA.
 set -euo pipefail
 
-runs="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
-  --jq ".check_runs[] | select(.details_url | contains(\"/actions/runs/${GITHUB_RUN_ID}/\") | not) | [.name, .status, (.conclusion // \"\")] | @tsv")"
+run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&event=push&per_page=100" \
+  --jq '.workflow_runs | max_by(.run_started_at) // empty | [.html_url, .status, (.conclusion // "")] | @tsv')"
 
-if [[ -z "$runs" ]]; then
-  echo "::error::No CI check runs found for ${GITHUB_SHA:0:7}; wait for CI to start" >&2
+if [[ -z "$run" ]]; then
+  echo "::error::No CI run found for ${GITHUB_SHA:0:7}; wait for CI to start" >&2
   exit 1
 fi
 
-bad="$(awk -F'\t' '!($2 == "completed" && ($3 == "success" || $3 == "skipped" || $3 == "neutral")) { printf "  %s (%s %s)\n", $1, $2, $3 }' <<< "$runs")"
-if [[ -n "$bad" ]]; then
-  echo "::error::CI is not green for ${GITHUB_SHA:0:7}; wait for it to finish or fix failures:" >&2
-  echo "$bad" >&2
+IFS=$'\t' read -r url status conclusion <<< "$run"
+if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
+  echo "::error::CI is not green for ${GITHUB_SHA:0:7} (${status} ${conclusion}): ${url}" >&2
   exit 1
 fi
 
-echo "CI passed for ${GITHUB_SHA:0:7}"
+echo "CI passed for ${GITHUB_SHA:0:7}: ${url}"
