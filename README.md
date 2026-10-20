@@ -11,6 +11,7 @@ Module-specific usage and compatibility notes live in each module directory.
 | Module | Description | Documentation |
 | --- | --- | --- |
 | [`config`](config) | Typed YAML and environment configuration loading | [Usage](config/README.md) |
+| [`kafka`](kafka) | Sarama-based Kafka producer/consumer with batching and SASL/TLS support | [Usage](kafka/README.md) |
 
 ## Development
 
