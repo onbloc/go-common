@@ -147,7 +147,7 @@ Releasing one module does not change another module's version. A release current
 Releases are created by the `Release` GitHub Actions workflow (Actions > Release > Run workflow, branch `main`):
 
 1. Merge the change into `main` and confirm CI passes.
-2. Select the `module` and the `bump` (`patch`, `minor` or `major`). The workflow finds the module's latest `<module>/vX.Y.Z` tag, increments the selected component, runs the module's tests, pushes an annotated tag and creates a GitHub release with generated notes.
+2. Select the `module` and the `bump` (`patch`, `minor` or `major`). The workflow requires every CI check on the `main` commit to have succeeded (it fails while CI is still running), finds the module's latest `<module>/vX.Y.Z` tag, increments the selected component, runs the module's tests, pushes an annotated tag and creates a GitHub release. Release notes list only the commits that touched the module's directory, and the release is never marked as the repository's "Latest".
 3. The first release of a module is `v0.1.0` (or `vN.0.0` for a `/vN` module path).
 4. A `major` bump fails unless the module path already ends in the new major (see below); update `go.mod` and imports first.
 5. New modules must be added to the `module` options in `.github/workflows/release.yml`.

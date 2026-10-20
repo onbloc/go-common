@@ -34,11 +34,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      checks: read
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      - name: Require green CI on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./.github/scripts/check-ci.sh
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -69,9 +75,22 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          MODULE: ${{ inputs.module }}
           TAG: ${{ steps.tag.outputs.tag }}
           PREV: ${{ steps.tag.outputs.prev }}
         run: |
-          args=(--verify-tag --title "$TAG" --generate-notes)
-          if [ -n "$PREV" ]; then args+=(--notes-start-tag "$PREV"); fi
-          gh release create "$TAG" "${args[@]}"
+          # Notes list only commits touching the module directory
+          range="${PREV:+${PREV}..}${GITHUB_SHA}"
+          changes="$(git log --no-merges --format='- %s (%h)' "$range" -- "$MODULE")"
+          {
+            echo "## Changes"
+            echo
+            echo "${changes:-No changes to ${MODULE} since ${PREV:-the beginning}.}"
+            if [ -n "$PREV" ]; then
+              echo
+              echo "**Full diff**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV}...${TAG}"
+            fi
+          } > "$RUNNER_TEMP/notes.md"
+          # Module tags must not take over the repository's Latest badge
+          gh release create "$TAG" --verify-tag --latest=false --title "$TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md"
