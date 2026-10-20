@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: Module to release
+        required: true
+        type: choice
+        options:
+          - config
+          - kafka
+      bump:
+        description: Version component to increment
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+
+concurrency:
+  group: release-${{ inputs.module }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Tag and release ${{ inputs.module }}
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Require green CI on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./.github/scripts/check-ci.sh
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ inputs.module }}/go.mod
+          cache: false
+
+      - name: Test module
+        working-directory: ${{ inputs.module }}
+        run: go test -race ./...
+
+      - name: Resolve next tag
+        id: tag
+        env:
+          MODULE: ${{ inputs.module }}
+          BUMP: ${{ inputs.bump }}
+        run: ./.github/scripts/next-tag.sh "$MODULE" "$BUMP" >> "$GITHUB_OUTPUT"
+
+      - name: Push annotated tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/${TAG}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODULE: ${{ inputs.module }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          PREV: ${{ steps.tag.outputs.prev }}
+        run: |
+          # Notes list only commits touching the module directory
+          range="${PREV:+${PREV}..}${GITHUB_SHA}"
+          changes="$(git log --no-merges --format='- %s (%h)' "$range" -- "$MODULE")"
+          {
+            echo "## Changes"
+            echo
+            echo "${changes:-No changes to ${MODULE} since ${PREV:-the beginning}.}"
+            if [ -n "$PREV" ]; then
+              echo
+              echo "**Full diff**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV}...${TAG}"
+            fi
+          } > "$RUNNER_TEMP/notes.md"
+          # Module tags must not take over the repository's Latest badge
+          gh release create "$TAG" --verify-tag --latest=false --title "$TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md"
