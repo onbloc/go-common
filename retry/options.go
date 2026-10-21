@@ -5,14 +5,8 @@ import (
 	"time"
 )
 
-// Options configures a single Do call.
-type Options[T any] func(T)
-
-func applyOptions[T any](t T, opts []Options[T]) {
-	for _, opt := range opts {
-		opt(t)
-	}
-}
+// Option configures a single Do call.
+type Option func(*settings)
 
 // settings holds the per-call state that Options modify.
 type settings struct {
@@ -28,7 +22,7 @@ func defaultSettings() *settings {
 // be followed by another, before the wait. attempt is the 1-based number of
 // the attempt that failed. It is not called after the last attempt. A nil fn
 // is ignored.
-func WithOnRetry(fn func(attempt int, err error)) Options[*settings] {
+func WithOnRetry(fn func(attempt int, err error)) Option {
 	return func(s *settings) {
 		if fn != nil {
 			s.onRetry = fn

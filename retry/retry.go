@@ -20,7 +20,7 @@ var ErrMaxAttempts = errors.New("retry: max attempts reached")
 // it stops at once and returns the zero value and an error that matches
 // ctx.Err() and, if fn had failed, its last error. A running fn is not
 // interrupted; pass ctx into it if it should be.
-func Do[T any](ctx context.Context, fn func() (T, error), cfg *Config, opts ...Options[*settings]) (T, error) {
+func Do[T any](ctx context.Context, fn func() (T, error), cfg *Config, opts ...Option) (T, error) {
 	var zero T
 
 	if fn == nil {
@@ -32,7 +32,9 @@ func Do[T any](ctx context.Context, fn func() (T, error), cfg *Config, opts ...O
 	}
 
 	s := defaultSettings()
-	applyOptions(s, opts)
+	for _, opt := range opts {
+		opt(s)
+	}
 
 	interval := time.Duration(cfg.InitialIntervalMs) * time.Millisecond
 

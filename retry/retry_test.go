@@ -12,7 +12,7 @@ var errBoom = errors.New("boom")
 
 // recordSleeps replaces the wait with a recorder so delays are asserted
 // without real sleeping.
-func recordSleeps(waits *[]time.Duration) Options[*settings] {
+func recordSleeps(waits *[]time.Duration) Option {
 	return func(s *settings) {
 		s.sleep = func(ctx context.Context, d time.Duration) error {
 			*waits = append(*waits, d)
