@@ -42,7 +42,7 @@ if err := server.Start(ctx); err != nil { // blocks until ctx ends
 
 When `ctx` ends, the server stops accepting calls and waits for in-flight ones (`GracefulStop`) for at most `shutdown_timeout_ms`, then closes them (`Stop`). Streaming calls that never end are why the bound matters: `GracefulStop` alone waits for them forever.
 
-`server.Ready()` is closed once the listener is bound, and `server.Addr()` then returns the real address, which is how to find the port when `port` is `"0"`.
+`server.Ready()` is closed once the listener is bound, and `server.Addr()` then returns the real address, which is how to find the port when `port` is `"0"`. `Ready()` is not closed when `Start` fails first (for example, the port is in use), so a caller waiting on it must also watch `Start`'s result.
 
 The gRPC reflection service is registered by default so tools such as `grpcurl` can list services. Set `disable_reflection: true` to turn it off where exposing the service list is unwanted.
 
@@ -103,9 +103,13 @@ Client keys (`ClientConfig`):
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `address` | none (required) | `host:port` or gRPC target URI |
-| `instance_id` | empty | identifies this client to the services it calls |
+| `instance_id` | empty | caller-side label returned by `GetInstanceID`; this module does not send it to servers |
 | `load_balancing_policy` | `round_robin` | gRPC load balancing policy name |
 | `min_connect_timeout_ms` | `5000` | minimum time per connection attempt |
+
+Timeouts in milliseconds must not exceed `9223372036854` (about 292 years), the most a `time.Duration` can hold; `Validate` rejects larger values.
+
+`load_balancing_policy` must name a policy registered with gRPC. `round_robin` and `pick_first` are built in; others (for example `weighted_round_robin`) need their grpc package imported first. An unknown name, such as the typo `roundrobin`, is rejected by `Validate` because gRPC would otherwise silently fall back to `pick_first`.
 
 ### TLS
 
@@ -113,6 +117,12 @@ TLS is off by default. TLS 1.2 is the minimum version, and there is no config op
 
 - **Server:** `enabled` needs `cert_file` and `key_file`. Setting `ca_file` also requires every client to present a certificate signed by that CA.
 - **Client:** `ca_file` verifies the server (system roots when unset). `cert_file` and `key_file`, set together, are the client certificate for mutual TLS. `server_name` overrides the name checked against the server certificate; it defaults to the host in `address`.
+
+Setting any of these keys while `enabled` is false is rejected by `Validate`: a CA or certificate that is not applied would leave the endpoint in plaintext, and a server without client authentication. Set `enabled: true` to use them.
+
+### Defaults
+
+The defaults match the package this was built from and favor easy setup over exposure: the server listens on all interfaces (`host` empty), serves plaintext, and registers the reflection service. In production, set `tls.enabled`, bind `host` to the interface you need, and consider `disable_reflection: true`.
 
 ## Extending gRPC
 
