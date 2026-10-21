@@ -42,6 +42,8 @@ if err := server.Start(ctx); err != nil { // blocks until ctx ends
 
 When `ctx` ends, the server stops accepting calls and waits for in-flight ones (`GracefulStop`) for at most `shutdown_timeout_ms`, then closes them (`Stop`). Streaming calls that never end are why the bound matters: `GracefulStop` alone waits for them forever.
 
+`Start` returns `ErrShutdownTimeout` on time even when a handler ignores cancellation (for example, one stuck in I/O that takes no context). That handler is not interrupted: it keeps running in the background after `Start` returns, and the stop completes when it returns. Pass the request context to the work a handler starts so that a forced stop can end it. A `Stop` called after `Start` returned `ErrShutdownTimeout` (such as a deferred `Stop`) returns at once.
+
 `server.Ready()` is closed once the listener is bound, and `server.Addr()` then returns the real address, which is how to find the port when `port` is `"0"`. `Ready()` is not closed when `Start` fails first (for example, the port is in use), so a caller waiting on it must also watch `Start`'s result.
 
 The gRPC reflection service is registered by default so tools such as `grpcurl` can list services. Set `disable_reflection: true` to turn it off where exposing the service list is unwanted.
