@@ -10,6 +10,7 @@ on:
         options:
           - config
           - kafka
+          - retry
       bump:
         description: Version component to increment
         required: true
