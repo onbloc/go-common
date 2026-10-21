@@ -10,6 +10,7 @@ on:
         options:
           - config
           - kafka
+          - rpc
       bump:
         description: Version component to increment
         required: true
