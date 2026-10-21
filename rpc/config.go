@@ -3,11 +3,14 @@ package rpc
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"google.golang.org/grpc/balancer"
 )
 
 // Documented defaults. The struct `default` tags below must repeat these as
@@ -22,6 +25,10 @@ const (
 	defaultMinConnectTimeoutMs = 5000
 )
 
+// maxTimeoutMs is the largest millisecond count that still fits a
+// time.Duration (int64 nanoseconds); larger values would overflow.
+const maxTimeoutMs = math.MaxInt64 / int64(time.Millisecond)
+
 var loadBalancingPolicyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // TLSConfig configures transport security for a server or a client. TLS 1.2 is
@@ -34,12 +41,40 @@ var loadBalancingPolicyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // system roots. CertFile and KeyFile, set together, are the client certificate
 // for mutual TLS. ServerName overrides the name verified against the server
 // certificate (default: the host in ClientConfig.Address).
+//
+// With Enabled false, setting any other TLS key is rejected by Validate: a CA
+// or certificate that was set but not applied would leave the endpoint in
+// plaintext, and for a server without client authentication.
 type TLSConfig struct {
 	Enabled    bool   `mapstructure:"enabled" default:"false"`
 	CertFile   string `mapstructure:"cert_file" default:""`
 	KeyFile    string `mapstructure:"key_file" default:""`
 	CAFile     string `mapstructure:"ca_file" default:""`
 	ServerName string `mapstructure:"server_name" default:""`
+}
+
+// setKeys lists the TLS keys that are set but have no effect while TLS is
+// disabled. Validate rejects them: a CA or certificate that is silently
+// ignored leaves the endpoint in plaintext, with no client authentication.
+// server_name only matters to a client.
+func (t *TLSConfig) setKeys(withServerName bool) []string {
+	var keys []string
+
+	for _, f := range []struct{ key, value string }{
+		{"cert_file", t.CertFile},
+		{"key_file", t.KeyFile},
+		{"ca_file", t.CAFile},
+	} {
+		if f.value != "" {
+			keys = append(keys, f.key)
+		}
+	}
+
+	if withServerName && t.ServerName != "" {
+		keys = append(keys, "server_name")
+	}
+
+	return keys
 }
 
 // ServerConfig is the application-owned gRPC server configuration. It is a
@@ -106,12 +141,16 @@ func (c *ServerConfig) Validate() error {
 		}
 	}
 
-	if c.ShutdownTimeoutMs < 0 {
-		errs = append(errs, fmt.Errorf("rpc server shutdown_timeout_ms must not be negative, got %d", c.ShutdownTimeoutMs))
+	if c.ShutdownTimeoutMs < 0 || int64(c.ShutdownTimeoutMs) > maxTimeoutMs {
+		errs = append(errs, fmt.Errorf("rpc server shutdown_timeout_ms must be between 0 and %d, got %d", maxTimeoutMs, c.ShutdownTimeoutMs))
 	}
 
-	if c.TLS.Enabled && (c.TLS.CertFile == "" || c.TLS.KeyFile == "") {
-		errs = append(errs, errors.New("rpc server tls requires both cert_file and key_file"))
+	if c.TLS.Enabled {
+		if c.TLS.CertFile == "" || c.TLS.KeyFile == "" {
+			errs = append(errs, errors.New("rpc server tls requires both cert_file and key_file"))
+		}
+	} else if keys := c.TLS.setKeys(false); len(keys) > 0 {
+		errs = append(errs, fmt.Errorf("rpc server tls is disabled but %s set; set tls.enabled to use them", strings.Join(keys, ", ")))
 	}
 
 	return errors.Join(errs...)
@@ -123,7 +162,8 @@ func (c *ServerConfig) Validate() error {
 // Unset (zero) tuning fields are valid and resolve to their documented
 // defaults. Call Validate to check a ClientConfig; NewClient does so too.
 type ClientConfig struct {
-	// InstanceID identifies this client instance to the services it calls.
+	// InstanceID is a caller-side label: it is returned by GetInstanceID and
+	// logged on creation, but this package does not send it to servers.
 	InstanceID string `mapstructure:"instance_id" default:""`
 	// Address is the target as host:port (or any gRPC target URI). Required.
 	Address string `mapstructure:"address" default:""`
@@ -174,16 +214,26 @@ func (c *ClientConfig) Validate() error {
 		errs = append(errs, errors.New("rpc client address is required"))
 	}
 
-	if c.LoadBalancingPolicy != "" && !loadBalancingPolicyPattern.MatchString(c.LoadBalancingPolicy) {
-		errs = append(errs, fmt.Errorf("rpc client load_balancing_policy %q must be a lowercase policy name such as round_robin", c.LoadBalancingPolicy))
+	if p := c.LoadBalancingPolicy; p != "" {
+		switch {
+		case !loadBalancingPolicyPattern.MatchString(p):
+			errs = append(errs, fmt.Errorf("rpc client load_balancing_policy %q must be a lowercase policy name such as round_robin", p))
+		case balancer.Get(p) == nil:
+			// grpc silently falls back to pick_first for an unknown name.
+			errs = append(errs, fmt.Errorf("rpc client load_balancing_policy %q is not registered; round_robin and pick_first are built in, other policies need their grpc package imported", p))
+		}
 	}
 
-	if c.MinConnectTimeoutMs < 0 {
-		errs = append(errs, fmt.Errorf("rpc client min_connect_timeout_ms must not be negative, got %d", c.MinConnectTimeoutMs))
+	if c.MinConnectTimeoutMs < 0 || int64(c.MinConnectTimeoutMs) > maxTimeoutMs {
+		errs = append(errs, fmt.Errorf("rpc client min_connect_timeout_ms must be between 0 and %d, got %d", maxTimeoutMs, c.MinConnectTimeoutMs))
 	}
 
-	if c.TLS.Enabled && (c.TLS.CertFile == "") != (c.TLS.KeyFile == "") {
-		errs = append(errs, errors.New("rpc client tls requires cert_file and key_file together"))
+	if c.TLS.Enabled {
+		if (c.TLS.CertFile == "") != (c.TLS.KeyFile == "") {
+			errs = append(errs, errors.New("rpc client tls requires cert_file and key_file together"))
+		}
+	} else if keys := c.TLS.setKeys(true); len(keys) > 0 {
+		errs = append(errs, fmt.Errorf("rpc client tls is disabled but %s set; set tls.enabled to use them", strings.Join(keys, ", ")))
 	}
 
 	return errors.Join(errs...)

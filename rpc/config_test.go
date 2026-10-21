@@ -3,6 +3,7 @@ package rpc
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -54,7 +55,10 @@ func TestServerConfigValidate(t *testing.T) {
 		{name: "port negative", mutate: func(c *ServerConfig) { c.Port = "-1" }, wantErr: "port"},
 		{name: "negative shutdown timeout", mutate: func(c *ServerConfig) { c.ShutdownTimeoutMs = -1 }, wantErr: "shutdown_timeout_ms"},
 		{name: "tls without key", mutate: func(c *ServerConfig) { c.TLS = TLSConfig{Enabled: true, CertFile: "c.pem"} }, wantErr: "cert_file and key_file"},
-		{name: "tls disabled ignores files", mutate: func(c *ServerConfig) { c.TLS = TLSConfig{CertFile: "c.pem"} }},
+		{name: "tls disabled with cert_file", mutate: func(c *ServerConfig) { c.TLS = TLSConfig{CertFile: "c.pem"} }, wantErr: "tls is disabled but cert_file set"},
+		// A CA set without enabled must not silently drop mutual TLS.
+		{name: "tls disabled with ca_file", mutate: func(c *ServerConfig) { c.TLS = TLSConfig{CAFile: "ca.pem"} }, wantErr: "tls is disabled but ca_file set"},
+		{name: "tls disabled with every file", mutate: func(c *ServerConfig) { c.TLS = TLSConfig{CertFile: "c", KeyFile: "k", CAFile: "ca"} }, wantErr: "cert_file, key_file, ca_file"},
 	}
 
 	for _, tt := range tests {
@@ -91,10 +95,15 @@ func TestClientConfigValidate(t *testing.T) {
 		{name: "policy with quote", mutate: func(c *ClientConfig) { c.LoadBalancingPolicy = `x"}` }, wantErr: "load_balancing_policy"},
 		{name: "policy uppercase", mutate: func(c *ClientConfig) { c.LoadBalancingPolicy = "RoundRobin" }, wantErr: "load_balancing_policy"},
 		{name: "pick_first policy", mutate: func(c *ClientConfig) { c.LoadBalancingPolicy = "pick_first" }},
+		{name: "policy typo", mutate: func(c *ClientConfig) { c.LoadBalancingPolicy = "roundrobin" }, wantErr: "not registered"},
+		{name: "policy not registered", mutate: func(c *ClientConfig) { c.LoadBalancingPolicy = "nonexistent_policy" }, wantErr: "not registered"},
 		{name: "negative connect timeout", mutate: func(c *ClientConfig) { c.MinConnectTimeoutMs = -1 }, wantErr: "min_connect_timeout_ms"},
 		{name: "tls cert without key", mutate: func(c *ClientConfig) { c.TLS = TLSConfig{Enabled: true, CertFile: "c.pem"} }, wantErr: "cert_file and key_file"},
 		{name: "tls key without cert", mutate: func(c *ClientConfig) { c.TLS = TLSConfig{Enabled: true, KeyFile: "k.pem"} }, wantErr: "cert_file and key_file"},
 		{name: "tls server only", mutate: func(c *ClientConfig) { c.TLS = TLSConfig{Enabled: true} }},
+		{name: "tls disabled with ca_file", mutate: func(c *ClientConfig) { c.TLS = TLSConfig{CAFile: "ca.pem"} }, wantErr: "tls is disabled but ca_file set"},
+		{name: "tls disabled with client certificate", mutate: func(c *ClientConfig) { c.TLS = TLSConfig{CertFile: "c.pem", KeyFile: "k.pem"} }, wantErr: "cert_file, key_file"},
+		{name: "tls disabled with server_name", mutate: func(c *ClientConfig) { c.TLS = TLSConfig{ServerName: "svc"} }, wantErr: "server_name"},
 	}
 
 	for _, tt := range tests {
@@ -143,4 +152,50 @@ func assertErr(t *testing.T, err error, want string) {
 	case want != "" && !strings.Contains(err.Error(), want):
 		t.Fatalf("error %q does not contain %q", err, want)
 	}
+}
+
+// A millisecond count past maxTimeoutMs overflows time.Duration into a negative
+// value: a graceful shutdown would give up at once and force-stop in-flight calls.
+func TestTimeoutUpperBound(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("an int cannot exceed the bound on this platform")
+	}
+
+	limit := int(int64(maxTimeoutMs)) // a variable, so a 32-bit build still compiles
+
+	t.Run("server at the bound", func(t *testing.T) {
+		conf := &ServerConfig{ShutdownTimeoutMs: limit}
+		assertErr(t, conf.Validate(), "")
+
+		if got := conf.ShutdownTimeout(); got <= 0 {
+			t.Fatalf("ShutdownTimeout() = %s at the bound, want positive", got)
+		}
+	})
+
+	t.Run("server past the bound", func(t *testing.T) {
+		conf := &ServerConfig{ShutdownTimeoutMs: limit + 1}
+		assertErr(t, conf.Validate(), "shutdown_timeout_ms")
+
+		if _, err := NewServer(conf); err == nil {
+			t.Fatal("NewServer accepted an overflowing shutdown timeout")
+		}
+	})
+
+	t.Run("client at the bound", func(t *testing.T) {
+		conf := &ClientConfig{Address: "localhost:1", MinConnectTimeoutMs: limit}
+		assertErr(t, conf.Validate(), "")
+
+		if got := conf.minConnectTimeout(); got <= 0 {
+			t.Fatalf("minConnectTimeout() = %s at the bound, want positive", got)
+		}
+	})
+
+	t.Run("client past the bound", func(t *testing.T) {
+		conf := &ClientConfig{Address: "localhost:1", MinConnectTimeoutMs: limit + 1}
+		assertErr(t, conf.Validate(), "min_connect_timeout_ms")
+
+		if _, err := NewClient(conf); err == nil {
+			t.Fatal("NewClient accepted an overflowing connect timeout")
+		}
+	})
 }

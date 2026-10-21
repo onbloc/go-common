@@ -90,6 +90,9 @@ func (s *Server) GetServiceRegistrar() grpc.ServiceRegistrar {
 }
 
 // Ready is closed once Start has bound its listener, after which Addr is set.
+// It is not closed when Start fails before that (for example, the port is in
+// use): a caller that waits on Ready must also watch Start's result, or it
+// blocks forever.
 func (s *Server) Ready() <-chan struct{} {
 	return s.ready
 }
