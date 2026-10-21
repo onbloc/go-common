@@ -12,6 +12,7 @@ Module-specific usage and compatibility notes live in each module directory.
 | --- | --- | --- |
 | [`config`](config) | Typed YAML and environment configuration loading | [Usage](config/README.md) |
 | [`kafka`](kafka) | Sarama-based Kafka producer/consumer with batching and SASL/TLS support | [Usage](kafka/README.md) |
+| [`retry`](retry) | Generic retry with exponential backoff, capped waits, and context cancellation | [Usage](retry/README.md) |
 | [`rpc`](rpc) | gRPC server/client wrapper with TLS, context-driven graceful shutdown, and injectable gRPC options | [Usage](rpc/README.md) |
 
 ## Development
