@@ -11,6 +11,7 @@ on:
           - config
           - kafka
           - retry
+          - rpc
       bump:
         description: Version component to increment
         required: true
