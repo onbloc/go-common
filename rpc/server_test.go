@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -254,5 +255,103 @@ func TestNewServerRejectsInvalidConfig(t *testing.T) {
 
 	if _, err := NewServer(nil); err == nil {
 		t.Fatal("NewServer accepted a nil config")
+	}
+}
+
+// holdingServer starts a server whose unary handlers wait on release after
+// their context ends, like a handler stuck in I/O that ignores cancellation.
+// One call is in flight when it returns. release lets the handlers finish; it
+// also runs at cleanup, before the server's Stop, which would otherwise wait.
+func holdingServer(t *testing.T, shutdownTimeoutMs int) (rs *runningServer, release func()) {
+	t.Helper()
+
+	entered := make(chan struct{}, 1)
+	released := make(chan struct{})
+	release = sync.OnceFunc(func() { close(released) })
+
+	hold := func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
+		entered <- struct{}{}
+
+		<-ctx.Done()
+		<-released
+
+		return next(ctx, req)
+	}
+
+	rs = startServer(t, &ServerConfig{ShutdownTimeoutMs: shutdownTimeoutMs}, WithGRPCServerOptions(grpc.UnaryInterceptor(hold)))
+	t.Cleanup(release) // registered after startServer's cleanup, so it runs first
+
+	conn := clientFor(t, rs.Server).GetConnection()
+
+	// The call stays in flight until the server stops; its result is not needed.
+	callDone := make(chan error, 1)
+
+	go func() { callDone <- check(t, conn) }()
+
+	select {
+	case <-entered:
+	case <-time.After(testTimeout):
+		t.Fatal("handler was never called")
+	}
+
+	return rs, release
+}
+
+// GracefulStop and Stop both wait for a handler that ignores cancellation, and
+// Serve returns only after they finish. Start must not join any of them, or the
+// shutdown timeout bounds nothing.
+//
+// Whether Serve returns on its own depends on which of the background Stop and
+// GracefulStop takes the server lock first, so one run can pass by luck: repeat.
+func TestServerShutdownTimeoutHoldsWhileHandlerIgnoresCancellation(t *testing.T) {
+	for i := range 10 {
+		t.Run(strconv.Itoa(i), func(t *testing.T) {
+			rs, _ := holdingServer(t, 20)
+			begin := time.Now()
+
+			rs.cancel()
+
+			select {
+			case err := <-rs.done:
+				if !errors.Is(err, ErrShutdownTimeout) {
+					t.Fatalf("Start() = %v, want ErrShutdownTimeout", err)
+				}
+
+				if elapsed := time.Since(begin); elapsed > 2*time.Second {
+					t.Fatalf("Start took %s with a 20ms shutdown timeout", elapsed)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("Start still blocked 2s after a 20ms shutdown timeout while a handler is held")
+			}
+		})
+	}
+}
+
+// The usual `defer server.Stop()` runs after Start returned ErrShutdownTimeout,
+// while the forced stop is still waiting on the handler. It must not wait too.
+func TestServerStopReturnsAfterForcedShutdown(t *testing.T) {
+	rs, _ := holdingServer(t, 50)
+
+	rs.cancel()
+
+	if err := rs.wait(t); !errors.Is(err, ErrShutdownTimeout) {
+		t.Fatalf("Start() = %v, want ErrShutdownTimeout", err)
+	}
+
+	// Give the background GracefulStop and Stop time to take the server lock that
+	// the held handler keeps; a Stop called earlier would race ahead of them.
+	time.Sleep(300 * time.Millisecond)
+
+	stopped := make(chan struct{})
+
+	go func() {
+		rs.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop still blocked 2s after Start forced the shutdown while a handler is held")
 	}
 }

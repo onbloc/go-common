@@ -44,8 +44,11 @@ type Server struct {
 
 	started atomic.Bool
 	stopped atomic.Bool
-	ready   chan struct{} // closed once the listener is bound
-	addr    net.Addr      // written before ready is closed
+	// forced is set once Start has forced the shutdown after the timeout; the
+	// stop itself continues in the background.
+	forced atomic.Bool
+	ready  chan struct{} // closed once the listener is bound
+	addr   net.Addr      // written before ready is closed
 }
 
 // NewServer validates conf and builds a Server. Options apply before the
@@ -114,6 +117,10 @@ func (s *Server) Addr() net.Addr {
 // ones up to ServerConfig.ShutdownTimeout, then closes them and returns
 // ErrShutdownTimeout. A shutdown triggered by ctx or Stop within the bound
 // returns nil. A failure to listen or serve is returned wrapped.
+//
+// ErrShutdownTimeout is returned on time even if a handler ignores
+// cancellation: the handler keeps running in the background, and the stop
+// completes when it returns. Start does not wait for it.
 func (s *Server) Start(ctx context.Context) error {
 	if !s.started.CompareAndSwap(false, true) {
 		return ErrAlreadyStarted
@@ -157,8 +164,17 @@ func (s *Server) Start(ctx context.Context) error {
 
 // Stop closes the server and its connections immediately. A running Start
 // returns nil; a Start after Stop fails.
+//
+// Like grpc.Server.Stop, it can wait for a graceful shutdown that an in-flight
+// handler is holding up. It returns at once when Start already forced the
+// shutdown after ShutdownTimeoutMs, so a deferred Stop after Start is safe.
 func (s *Server) Stop() {
 	s.stopped.Store(true)
+
+	if s.forced.Load() {
+		return
+	}
+
 	s.server.Stop()
 }
 
@@ -176,19 +192,22 @@ func (s *Server) shutdown(serveErr <-chan error) error {
 	timer := time.NewTimer(s.conf.ShutdownTimeout())
 	defer timer.Stop()
 
-	var result error
-
 	select {
 	case <-stopped:
+		<-serveErr
+
+		return nil
 	case <-timer.C:
 		s.logger.Errorf("gRPC server graceful shutdown exceeded %s, forcing stop", s.conf.ShutdownTimeout())
-		s.server.Stop()
-		<-stopped
 
-		result = ErrShutdownTimeout
+		// A handler that ignores cancellation holds GracefulStop, which holds the
+		// server lock that Stop needs, and Serve returns only after both finish.
+		// Waiting for any of them would make the timeout unbounded, so force the
+		// stop in the background and leave those goroutines to exit with the handler.
+		s.forced.Store(true)
+
+		go s.server.Stop()
+
+		return ErrShutdownTimeout
 	}
-
-	<-serveErr
-
-	return result
 }
