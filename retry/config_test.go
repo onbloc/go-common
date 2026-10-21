@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,8 @@ import (
 
 // limitMs is maxIntervalMs as an int. It goes through a variable so the
 // conversion is not a compile-time constant (which would not build on 32-bit).
+// The value is only meaningful when int is 64-bit; on 32-bit it is truncated,
+// so cases using it set wide and are skipped there.
 var limitMs = func() int {
 	limit := int64(maxIntervalMs)
 
@@ -45,19 +48,20 @@ func TestConfigValidate(t *testing.T) {
 		name    string
 		mutate  func(*Config)
 		wantErr string
+		wide    bool // needs a 64-bit int
 	}{
 		{name: "defaults", mutate: func(*Config) {}},
 		{name: "single attempt", mutate: func(c *Config) { c.MaxAttempts = 1 }},
 		{name: "no wait and no cap", mutate: func(c *Config) { c.InitialIntervalMs, c.MaxIntervalMs = 0, 0 }},
 		{name: "constant interval", mutate: func(c *Config) { c.Multiplier = 1 }},
 		{name: "max equals initial", mutate: func(c *Config) { c.MaxIntervalMs = c.InitialIntervalMs }},
-		{name: "largest interval", mutate: func(c *Config) { c.InitialIntervalMs, c.MaxIntervalMs = 0, limitMs }},
+		{name: "largest interval", mutate: func(c *Config) { c.InitialIntervalMs, c.MaxIntervalMs = 0, limitMs }, wide: true},
 		{name: "zero attempts", mutate: func(c *Config) { c.MaxAttempts = 0 }, wantErr: "retry.max_attempts"},
 		{name: "negative attempts", mutate: func(c *Config) { c.MaxAttempts = -1 }, wantErr: "retry.max_attempts"},
 		{name: "negative initial", mutate: func(c *Config) { c.InitialIntervalMs = -1 }, wantErr: "retry.initial_interval_ms"},
-		{name: "initial overflows duration", mutate: func(c *Config) { c.InitialIntervalMs = limitMs + 1 }, wantErr: "retry.initial_interval_ms"},
+		{name: "initial overflows duration", mutate: func(c *Config) { c.InitialIntervalMs = limitMs + 1 }, wantErr: "retry.initial_interval_ms", wide: true},
 		{name: "negative max", mutate: func(c *Config) { c.MaxIntervalMs = -1 }, wantErr: "retry.max_interval_ms"},
-		{name: "max overflows duration", mutate: func(c *Config) { c.MaxIntervalMs = limitMs + 1 }, wantErr: "retry.max_interval_ms"},
+		{name: "max overflows duration", mutate: func(c *Config) { c.MaxIntervalMs = limitMs + 1 }, wantErr: "retry.max_interval_ms", wide: true},
 		{name: "max below initial", mutate: func(c *Config) { c.InitialIntervalMs, c.MaxIntervalMs = 500, 100 }, wantErr: "must not be below"},
 		{name: "multiplier below one", mutate: func(c *Config) { c.Multiplier = 0.5 }, wantErr: "retry.multiplier"},
 		{name: "multiplier zero", mutate: func(c *Config) { c.Multiplier = 0 }, wantErr: "retry.multiplier"},
@@ -69,6 +73,10 @@ func TestConfigValidate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+
+			if tt.wide && strconv.IntSize < 64 {
+				t.Skip("int is too small to exceed the time.Duration limit")
+			}
 
 			cfg := DefaultConfig()
 			tt.mutate(cfg)
