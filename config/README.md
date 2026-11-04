@@ -78,7 +78,21 @@ Sources are applied from lowest to highest priority:
 default tag < base YAML < environment YAML < OS environment variable
 ```
 
-An empty environment variable is ignored, matching Viper's default behavior.
+An empty environment variable is ignored by default, matching Viper's default behavior.
+Set `Options.AllowEmptyEnv` to treat an explicitly set empty value as an override:
+
+```go
+commonconfig.Load(&target, commonconfig.Options{
+    Path:          "config/config.yaml",
+    AllowEmptyEnv: true,
+})
+```
+
+With this option, `APP_NAME=""` clears the configured name, while an unset
+`APP_NAME` still falls back to YAML or the default tag. Empty values use the
+normal target-type decoding: strings become `""`, integers become `0`, and
+booleans become `false`. Applications remain responsible for validating
+whether those values are acceptable.
 
 YAML overlays use Viper's merge behavior. Keep each key's value type consistent across files; replacing a mapping with a scalar is unsupported and may silently retain the base mapping.
 

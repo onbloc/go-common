@@ -28,6 +28,10 @@ type Options struct {
 	// EnvPrefix is prepended to generated environment-variable names. Dots and
 	// hyphens are normalized to underscores.
 	EnvPrefix string
+	// AllowEmptyEnv lets explicitly set empty environment variables override
+	// file values and defaults. Unset variables still fall back to those sources.
+	// By default, empty environment variables are ignored.
+	AllowEmptyEnv bool
 }
 
 // Load decodes configuration into target. Target must be a non-nil pointer to
@@ -35,9 +39,11 @@ type Options struct {
 //
 // Load applies sources in ascending precedence: struct default tags, the
 // required base YAML file, an optional environment YAML file, and non-empty OS
-// environment variables. Environment-variable names are derived from exported
-// fields and their mapstructure paths. Load returns file and decoding errors
-// with their original causes wrapped.
+// environment variables. When Options.AllowEmptyEnv is true, explicitly set
+// empty environment variables also override lower-priority sources.
+// Environment-variable names are derived from exported fields and their
+// mapstructure paths. Load returns file and decoding errors with their original
+// causes wrapped.
 func Load(target any, options Options) error {
 	if err := validateTarget(target); err != nil {
 		return err
@@ -49,6 +55,7 @@ func Load(target any, options Options) error {
 	}
 
 	loader := viper.New()
+	loader.AllowEmptyEnv(options.AllowEmptyEnv)
 	if err := applyTags(loader, reflect.TypeOf(target), nil, options.EnvPrefix, make(map[reflect.Type]bool)); err != nil {
 		return fmt.Errorf("prepare config bindings: %w", err)
 	}
