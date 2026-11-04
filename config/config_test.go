@@ -38,6 +38,69 @@ func TestLoadPrecedence(t *testing.T) {
 	}
 }
 
+func TestLoadEmptyEnvironmentOverride(t *testing.T) {
+	tests := []struct {
+		name          string
+		allowEmptyEnv bool
+		set           bool
+		value         string
+		want          string
+	}{
+		{name: "empty ignored by default", set: true, want: "local"},
+		{name: "explicit empty overrides overlay", allowEmptyEnv: true, set: true},
+		{name: "unset preserves overlay", allowEmptyEnv: true, want: "local"},
+		{name: "nonempty overrides overlay", allowEmptyEnv: true, set: true, value: "environment", want: "environment"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			directory := t.TempDir()
+			path := filepath.Join(directory, "config.yaml")
+			writeFile(t, path, "app:\n  name: base\n")
+			writeFile(t, filepath.Join(directory, "config.local.yaml"), "app:\n  name: local\n")
+			t.Setenv("CONFIG_TEST_APP_NAME", tt.value)
+			if !tt.set {
+				if err := os.Unsetenv("CONFIG_TEST_APP_NAME"); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			var target testConfig
+			if err := commonconfig.Load(&target, commonconfig.Options{
+				Path:          path,
+				Environment:   "local",
+				EnvPrefix:     "CONFIG_TEST",
+				AllowEmptyEnv: tt.allowEmptyEnv,
+			}); err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if target.App.Name != tt.want {
+				t.Fatalf("App.Name = %q, want %q", target.App.Name, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadEmptyEnvironmentClearsScalarValues(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "config.yaml")
+	writeFile(t, path, "app:\n  port: 9090\n  debug: true\n")
+	for _, key := range []string{"CONFIG_TEST_APP_NAME", "CONFIG_TEST_APP_PORT", "CONFIG_TEST_APP_DEBUG"} {
+		t.Setenv(key, "")
+	}
+
+	var target testConfig
+	if err := commonconfig.Load(&target, commonconfig.Options{
+		Path:          path,
+		EnvPrefix:     "CONFIG_TEST",
+		AllowEmptyEnv: true,
+	}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if target.App.Name != "" || target.App.Port != 0 || target.App.Debug {
+		t.Fatalf("empty overrides must clear the default name and YAML scalars: %+v", target.App)
+	}
+}
+
 func TestLoadBindsPrefixedNestedEnvironmentValue(t *testing.T) {
 	directory := t.TempDir()
 	writeFile(t, filepath.Join(directory, "config.yaml"), "app: {}\n")

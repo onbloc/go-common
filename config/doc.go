@@ -21,6 +21,8 @@
 // Environment variables have the highest precedence. Their names follow the
 // full mapstructure path, converted to uppercase snake case; app.port becomes
 // APP_PORT. Options.EnvPrefix can add a namespace such as SERVICE_APP_PORT.
+// Empty variables are ignored unless Options.AllowEmptyEnv is true; unset
+// variables always fall back to YAML values or default tags.
 //
 // Only exported fields participate in automatic bindings. Default-tag
 // registration and environment binding stop when a type recurs; recursive child
