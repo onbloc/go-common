@@ -3,7 +3,7 @@ module github.com/onbloc/go-common/kafka/tests/integration
 go 1.25.0
 
 require (
-	github.com/onbloc/go-common/kafka v0.0.0
+	github.com/onbloc/go-common/kafka v0.1.0
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go/modules/kafka v0.40.0
 )
